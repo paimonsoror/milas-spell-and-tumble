@@ -1,0 +1,6 @@
+apiVersion: v2
+name: milas-spell-and-tumble
+description: Mila's Spell & Tumble Championship — a browser spelling game
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

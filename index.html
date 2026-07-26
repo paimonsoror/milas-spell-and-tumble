@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mila's Spell &amp; Tumble Championship</title>
+<link rel="stylesheet" href="css/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤸</text></svg>">
+</head>
+<body>
+<div id="app">
+
+<!-- ========================= PROFILE PICKER ========================= -->
+<section class="screen" id="screen-profiles">
+  <div class="title-wrap">
+    <h1 id="profiles-title">Who's spelling today?</h1>
+    <div class="title-sub" id="profiles-sub">Pick your name to load your stars, medals and avatar.</div>
+  </div>
+  <div class="card">
+    <div class="voice-grid" id="profile-list"></div>
+    <div id="profile-new"></div>
+  </div>
+</section>
+
+<!-- ============================ HOME ============================ -->
+<section class="screen active" id="screen-home">
+  <div class="title-wrap">
+    <h1 id="home-title">Spell &amp; Tumble Championship</h1>
+    <div class="title-sub">Spell the word — then watch her fly. 🤸‍♀️📣</div>
+  </div>
+
+  <div class="card">
+    <div class="row center" style="margin-bottom:14px">
+      <button class="btn ghost small" id="btn-switch-player">👤 <b id="home-player">Player</b> — switch</button>
+      <span class="star-bank">⭐ <span id="home-stars">0</span> stars</span>
+    </div>
+
+    <div id="home-welcome"></div>
+    <div id="home-goal" style="margin-bottom:14px"></div>
+
+    <div class="home-grid">
+      <button class="home-tile" data-go="setup" data-mode="practice">
+        <span class="emoji">🏟️</span>
+        <span><b>Practice Gym</b><span>Spell as long as you like. Build your streak, no pressure.</span></span>
+      </button>
+      <button class="home-tile" data-go="setup" data-mode="competition">
+        <span class="emoji">🏅</span>
+        <span><b>Competition</b><span>A full routine judged by three judges. Go for gold!</span></span>
+      </button>
+      <button class="home-tile" data-go="studio">
+        <span class="emoji">✨</span>
+        <span><b>Avatar Studio</b><span>Spend your stars on hair, uniforms, bows and magic trails.</span></span>
+      </button>
+      <button class="home-tile" data-go="voice">
+        <span class="emoji">🎤</span>
+        <span><b>Coach's Voice</b><span>Pick who reads your words out loud.</span></span>
+      </button>
+      <button class="home-tile wide" id="btn-parents">
+        <span class="emoji">📋</span>
+        <span><b>Grown-Ups</b><span>Progress, tricky words, custom spelling lists and settings.</span></span>
+      </button>
+    </div>
+
+    <div class="trophy-strip" id="home-trophies"></div>
+  </div>
+</section>
+
+<!-- ============================ SETUP ============================ -->
+<section class="screen" id="screen-setup">
+  <div class="card">
+    <h2 id="setup-title">Get ready to compete!</h2>
+    <p class="muted" id="setup-sub">Pick your sport and your word list.</p>
+
+    <div class="field">
+      <label>Choose your sport</label>
+      <div class="choices" id="choose-sport">
+        <button class="choice" data-sport="gym"><span class="emoji">🤸‍♀️</span><b>Gymnastics</b><small>Cartwheels, flips, beam</small></button>
+        <button class="choice" data-sport="cheer"><span class="emoji">📣</span><b>Cheerleading</b><small>Jumps, motions, stunts</small></button>
+        <button class="choice" data-sport="dance"><span class="emoji">💃</span><b>Dance</b><small>Turns, leaps, kicks</small></button>
+        <button class="choice" data-sport="both"><span class="emoji">🌟</span><b>Mix It Up!</b><small>A bit of everything</small></button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Word list</label>
+      <div class="choices" id="choose-grade"></div>
+    </div>
+
+    <div class="field" id="field-length">
+      <label>How long is the routine?</label>
+      <div class="choices" id="choose-length">
+        <button class="choice" data-length="6"><b>6 words</b><small>Short routine</small></button>
+        <button class="choice" data-length="10"><b>10 words</b><small>Standard</small></button>
+        <button class="choice" data-length="16"><b>16 words</b><small>All-around</small></button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn ghost" data-go="home">← Back</button>
+      <div class="spacer"></div>
+      <button class="btn big gold" id="btn-start">Let's go! 🎀</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ GAME ============================ -->
+<section class="screen" id="screen-game">
+  <div class="hud">
+    <div class="hud-stat"><span class="k">Score</span><span class="v" id="hud-score">0</span></div>
+    <div class="hud-stat"><span class="k">Stars</span><span class="v" id="hud-stars">0</span></div>
+    <div class="hud-pill" id="hud-streak">Streak 0</div>
+    <div class="streak-dots" id="hud-dots" aria-label="Your words so far"></div>
+    <div class="spacer"></div>
+    <div class="hud-stat" id="hud-progress-wrap"><span class="k">Word</span><span class="v" id="hud-progress">1/10</span></div>
+    <button class="btn small ghost" id="btn-quit">Finish</button>
+    <div class="hud-goal" id="hud-goal"></div>
+  </div>
+
+  <div class="arena">
+    <!-- scenery -->
+    <svg id="arena-scene" viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#312e81"/>
+          <stop offset="100%" stop-color="#4c1d95"/>
+        </linearGradient>
+        <linearGradient id="floorMat" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#a78bfa"/>
+          <stop offset="100%" stop-color="#7c3aed"/>
+        </linearGradient>
+        <radialGradient id="spot" cx="50%" cy="0%" r="80%">
+          <stop offset="0%" stop-color="#fef9c3" stop-opacity=".38"/>
+          <stop offset="100%" stop-color="#fef9c3" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <rect width="700" height="380" fill="url(#wall)"/>
+      <ellipse cx="350" cy="40" rx="330" ry="230" fill="url(#spot)"/>
+
+      <!-- crowd (filled in by JS) -->
+      <g id="crowd"></g>
+
+      <!-- barrier wall under the stands, then the ground plane, so the arena
+           reads as a room rather than a mat floating in a purple void -->
+      <rect x="0" y="166" width="700" height="142" fill="#2e1065"/>
+      <rect x="0" y="166" width="700" height="5" fill="#8b5cf6" opacity=".8"/>
+      <rect x="0" y="308" width="700" height="72" fill="#5b21b6"/>
+      <rect x="0" y="308" width="700" height="4" fill="#7c3aed" opacity=".8"/>
+
+      <!-- banner -->
+      <g>
+        <path d="M 190,0 L 510,0 L 510,44 L 350,58 L 190,44 Z" fill="#be185d"/>
+        <path d="M 190,44 L 350,58 L 510,44 L 510,50 L 350,64 L 190,50 Z" fill="#831843"/>
+        <text x="350" y="30" text-anchor="middle" font-family="Trebuchet MS, sans-serif"
+              font-size="19" font-weight="bold" fill="#fff" letter-spacing="1.5">STATE CHAMPIONSHIP</text>
+      </g>
+
+      <!-- judges' table, sitting on the ground plane -->
+      <g id="judges-table">
+        <rect x="24" y="274" width="130" height="34" rx="5" fill="#1e1b4b"/>
+        <rect x="24" y="274" width="130" height="6" rx="3" fill="#f472b6"/>
+        <g id="judge-heads"></g>
+      </g>
+
+      <!-- balance beam off to the side, just for scenery -->
+      <g opacity=".9">
+        <rect x="556" y="280" width="122" height="9" rx="3" fill="#d97706"/>
+        <rect x="566" y="289" width="7" height="19" fill="#78350f"/>
+        <rect x="660" y="289" width="7" height="19" fill="#78350f"/>
+      </g>
+
+      <!-- the competition floor; its top edge at y=312 is where she stands -->
+      <rect x="40" y="312" width="620" height="46" rx="6" fill="url(#floorMat)"/>
+      <rect x="52" y="318" width="596" height="34" rx="4" fill="none" stroke="#ddd6fe" stroke-width="2" stroke-dasharray="9 7" opacity=".55"/>
+      <rect x="0" y="358" width="700" height="22" fill="#3b0764"/>
+    </svg>
+
+    <!-- the gymnast lives in her own layer so the scenery never gets redrawn -->
+    <svg id="arena-gymnast" viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice"></svg>
+
+    <div class="layer-fx" id="fx-layer"></div>
+    <div class="judge-flash" id="judge-flash"></div>
+    <div class="skill-name" id="skill-name"></div>
+  </div>
+
+  <div class="spell">
+    <div class="spell-prompt">
+      <button class="btn small" id="btn-say">🔊 Say it again</button>
+      <button class="btn small ghost" id="btn-slow">🐢 Slowly</button>
+      <button class="btn small ghost" id="btn-hint">💡 Hint</button>
+      <div class="spell-hint" id="spell-hint"></div>
+    </div>
+
+    <div class="letter-boxes" id="letter-boxes"></div>
+
+    <form class="spell-input-row" id="spell-form" autocomplete="off">
+      <input type="text" class="spell-input" id="spell-input"
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+             aria-label="Type the word you heard">
+      <button class="btn big teal" type="submit" id="btn-submit">Spell it! ✓</button>
+    </form>
+
+    <div class="feedback" id="feedback"></div>
+    <div class="mc-choices" id="mc-choices" style="display:none"></div>
+  </div>
+</section>
+
+<!-- ============================ RESULTS ============================ -->
+<section class="screen" id="screen-results">
+  <div class="card center">
+    <div class="medal-big" id="res-medal">🥇</div>
+    <h2 id="res-title">Gold Medal!</h2>
+    <div class="score-big" id="res-score">9.4</div>
+    <p class="muted" id="res-sub">Final score</p>
+
+    <div class="judges" id="res-judges"></div>
+
+    <div class="row center" style="margin:6px 0 0">
+      <span class="star-bank">⭐ +<span id="res-stars">0</span> stars earned</span>
+    </div>
+    <div id="res-daily"></div>
+    <div id="res-goal" style="margin:12px 0 18px"></div>
+
+    <div class="recap" id="res-recap"></div>
+
+    <div class="row center" style="margin-top:20px">
+      <button class="btn big" id="btn-again">Again! 🔁</button>
+      <button class="btn big pink" data-go="studio">Spend Stars ✨</button>
+      <button class="btn ghost" data-go="home">Home</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ VOICE ============================ -->
+<section class="screen" id="screen-voice">
+  <div class="card">
+    <div class="row" style="margin-bottom:4px">
+      <h2 style="margin:0">🎤 Coach's Voice</h2>
+      <div class="spacer"></div>
+      <button class="btn ghost small" data-go="home">← Home</button>
+    </div>
+    <p class="muted">Who should read your words out loud? Tap one to hear it.</p>
+
+    <div id="voice-warning"></div>
+    <div class="voice-grid" id="voice-presets"></div>
+    <div id="voice-tune"></div>
+
+    <div class="row center" style="margin-top:18px">
+      <button class="btn big teal" id="btn-voice-test">🔊 Hear a whole word</button>
+      <button class="btn big" data-go="home">Done ✓</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ STUDIO ============================ -->
+<section class="screen" id="screen-studio">
+  <div class="card">
+    <div class="row" style="margin-bottom:14px">
+      <h2 style="margin:0">Avatar Studio</h2>
+      <div class="spacer"></div>
+      <span class="star-bank">⭐ <span id="studio-stars">0</span></span>
+    </div>
+
+    <div id="studio-goal" style="margin-bottom:14px"></div>
+
+    <div class="studio">
+      <div>
+        <!-- viewBox is cropped tight around the figure so she fills the panel;
+             the arena uses the full 700x380 stage, this one does not -->
+        <div class="studio-preview">
+          <svg id="studio-floor" viewBox="200 15 330 310" aria-hidden="true">
+            <rect x="0" y="312" width="700" height="70" fill="#c4b5fd"/>
+            <rect x="180" y="306" width="340" height="10" rx="5" fill="#a78bfa"/>
+          </svg>
+          <svg id="studio-gymnast" viewBox="200 15 330 310"></svg>
+        </div>
+        <div id="try-bar"></div>
+        <div class="row center" style="margin-top:10px">
+          <button class="btn small teal" id="btn-preview-skill">▶ Show me a skill</button>
+        </div>
+        <div class="row center" style="margin-top:10px">
+          <button class="btn ghost" data-go="home">← Home</button>
+        </div>
+      </div>
+
+      <div>
+        <div id="studio-cats" class="studio-cats" role="tablist"></div>
+        <div id="studio-slots"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ PARENTS ============================ -->
+<section class="screen" id="screen-parents">
+  <div class="card">
+    <div class="row" style="margin-bottom:6px">
+      <h2 style="margin:0">Grown-Ups Dashboard</h2>
+      <div class="spacer"></div>
+      <button class="btn ghost small" data-go="home">← Back to game</button>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="progress" aria-selected="true">Progress</button>
+      <button class="tab" role="tab" data-tab="words" aria-selected="false">Word Detail</button>
+      <button class="tab" role="tab" data-tab="lists" aria-selected="false">Custom Lists</button>
+      <button class="tab" role="tab" data-tab="players" aria-selected="false">Players</button>
+      <button class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-progress"></div>
+    <div class="tab-panel" id="tab-words"></div>
+    <div class="tab-panel" id="tab-lists"></div>
+    <div class="tab-panel" id="tab-players"></div>
+    <div class="tab-panel" id="tab-settings"></div>
+  </div>
+</section>
+
+</div>
+
+<script src="js/words.js"></script>
+<script src="js/avatar.js"></script>
+<script src="js/skills.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

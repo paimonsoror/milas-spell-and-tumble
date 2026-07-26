@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Pose contact sheet</title>
+<link rel="stylesheet" href="../css/styles.css">
+<style>
+  body { background:#fff; padding:10px; display:block; }
+  .strip { margin-bottom:6px; }
+  .strip h4 { margin:2px 0; font-size:13px; }
+  .cells { display:flex; gap:2px; }
+  .cell { width:150px; height:190px; background:#ede9fe; border:1px solid #c4b5fd; position:relative; }
+  .cell svg { position:absolute; inset:0; width:100%; height:100%; }
+  .cell b { position:absolute; left:3px; top:2px; font-size:10px; color:#6d28d9; z-index:2; }
+  .floor { position:absolute; left:0; right:0; top:83.7%; height:2px; background:#a78bfa; }
+</style>
+</head><body>
+<div id="out"></div>
+<script src="../js/words.js"></script>
+<script src="../js/avatar.js"></script>
+<script src="../js/skills.js"></script>
+<script>
+// Sample each skill at even times and draw the interpolated pose, so the whole
+// movement can be eyeballed as a strip.
+const STEPS = 9;
+const shown = SKILLS.filter(s => s.difficulty > 0 || s.id === "wobble");
+const out = document.getElementById("out");
+
+function poseAt(skill, t) {
+  const fr = skill.frames.map(f => ({ t: f.t, p: poseFrom(f.p), ease: f.ease || "easeInOut" }));
+  let i = 0;
+  while (i < fr.length - 2 && t > fr[i + 1].t) i++;
+  const a = fr[i], b = fr[i + 1];
+  const k = Math.min(1, Math.max(0, (t - a.t) / Math.max(1e-4, b.t - a.t)));
+  const e = (EASINGS[b.ease] || EASINGS.easeInOut)(k);
+  const p = {};
+  for (const key of Object.keys(NEUTRAL_POSE)) p[key] = a.p[key] + (b.p[key] - a.p[key]) * e;
+  return p;
+}
+
+for (const skill of shown) {
+  const wrap = document.createElement("div");
+  wrap.className = "strip";
+  wrap.innerHTML = `<h4>${skill.name} (${skill.id}) — diff ${skill.difficulty}${skill.travel ? ", travel " + skill.travel : ""}</h4>
+                    <div class="cells"></div>`;
+  const cells = wrap.querySelector(".cells");
+  for (let i = 0; i < STEPS; i++) {
+    const t = i / (STEPS - 1);
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    // viewBox follows the figure so travelling skills stay in frame
+    const cx = 350 + (skill.travel || 0) * t;
+    cell.innerHTML = `<b>${t.toFixed(2)}</b><div class="floor"></div>
+      <svg viewBox="${cx - 90} 130 180 228"></svg>`;
+    cells.appendChild(cell);
+    const g = new Gymnast(cell.querySelector("svg"), { x: 350, y: 318 - RIG.floorFromHip });
+    g.setLook({ hair: "ponytail", outfit: skill.sport === "cheer" ? "cheerA" : "leo", bow: "big", shoes: "sneakers" });
+    g.setPose(poseAt(skill, t));
+  }
+  out.appendChild(wrap);
+}
+document.title = "ready";
+</script>
+</body></html>
