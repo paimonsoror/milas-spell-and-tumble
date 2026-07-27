@@ -169,9 +169,16 @@ Two profile fields drive the engagement loop and are worth knowing about:
   dashboard's Focus tab. `Store.selectReviewPool()` is the one function that
   reads `pinned`/`reviewMix`; `focusNote` is display-only and never read by
   the game itself.
-- **`sync`** — `{ code, lastSyncedAt }`. Cross-device sync opt-in — see
-  `docs/HANDOFF-ARCHITECTURE.md`. `code` is `null` until a grown-up turns sync
-  on; every sync call is fire-and-forget and silently no-ops without one.
+- **`sync`** — `{ code, lastSyncedAt, localOnly }`. Cross-device sync is **on
+  by default** — see `docs/HANDOFF-ARCHITECTURE.md`. Every profile gets a
+  `code` the moment it exists (`Store._autoProvisionSync()`, called from
+  `load()` for every profile and from `createProfile()`), and `Store.save()`
+  debounces an opportunistic push after every change — no dashboard visit
+  required. `localOnly` is the deliberate opt-out a grown-up flips from
+  Settings ("Play offline only"); while it's `true`, provisioning leaves the
+  profile alone instead of re-enabling it. Every sync call is still
+  fire-and-forget and silently no-ops without a reachable server, so the
+  offline folder copy of this game is unaffected either way.
 - **`stage`** — `"speller"` or `"explorer"`. Which of the two tracks this profile
   plays: the original spelling game, or the pre-literacy letters track for a
   younger sibling (see `docs/HANDOFF-EARLY-LEARNER.md`). Always defaults to
@@ -288,6 +295,23 @@ an operation log. `Store.reconcileSync()` sends the whole profile; whichever sid
 differences are gone. If that assumption ever stops holding — e.g. two kids
 sharing one synced profile from different devices at once — revisit this rather
 than patching around it.
+
+**Sync flipped from opt-in to opt-out.** It shipped (§ above) as something a
+grown-up had to turn on per profile. It's now the default: `Store.load()` and
+`Store.createProfile()` auto-provision a pairing code for every profile via
+`Store._autoProvisionSync()`, and `Store.save()` — the one function every
+mutation already funnels through — debounces a `reconcileSync()` after itself,
+so any change (a session's stars, an avatar purchase, a Focus-tab edit) pushes
+on its own instead of only at the handful of call sites that used to remember
+to call `debouncedSync()`. A grown-up who wants a device to stay offline flips
+`sync.localOnly` from Settings (`Store.setLocalOnly(true)`) — that's the one
+piece that has to stay a deliberate, explicit choice rather than a default,
+since it's the thing that decides whether a profile's data leaves the device
+at all. **What this doesn't change:** there's still no account system — a
+brand-new, never-before-seen device still needs the profile's pairing code
+once (`Store.linkWithCode()`) to know which profile to pull. "Automatic" means
+continuous background sync after that one lightweight pairing step, not
+zero-touch discovery across an arbitrary unpaired device.
 
 **The `/admin` page is a household-owner tool, not a player-facing surface.**
 It's server-rendered by `server/index.js` (`GET /admin`, plus a small

@@ -76,10 +76,13 @@ function blankProfile(name) {
     // per-profile, same as everything else here. focusNote is display-only:
     // it never feeds buildQueue(), it's a note for a person, not the algorithm.
     prefs: { pinned: {}, reviewMix: 0.34, focusNote: "" },
-    // cross-device sync opt-in — see HANDOFF-ARCHITECTURE.md. Unset (code:
-    // null) means this profile has never opted in and stays purely local,
-    // exactly as every profile always has.
-    sync: { code: null, lastSyncedAt: null },
+    // cross-device sync — see HANDOFF-ARCHITECTURE.md. On by default: every
+    // profile gets a pairing code the moment it exists (Store._autoProvisionSync())
+    // and every save() opportunistically pushes to it, so progress and the
+    // avatar follow her to any device that has the code. localOnly is the
+    // deliberate opt-out a grown-up flips in Settings — while it's true,
+    // load()/createProfile() leave code alone instead of re-provisioning one.
+    sync: { code: null, lastSyncedAt: null, localOnly: false },
     // "speller" is the original game this whole file used to be exclusively
     // about; "explorer" is the pre-literacy letters track for a younger
     // sibling (see HANDOFF-EARLY-LEARNER.md). This is a grown-up's explicit,
@@ -128,6 +131,7 @@ const Store = {
   file: blankFile(),
   data: null,
   firstRun: false,
+  _syncTimer: null,
 
   load() {
     try {
@@ -160,7 +164,26 @@ const Store = {
     }
 
     this._syncActive();
+
+    // sync is on by default: a profile from a build before this existed just
+    // gained `sync.localOnly: false` above via the blankProfile() merge, so it
+    // gets provisioned here exactly once, same as a brand-new profile does —
+    // nobody has to visit Settings for cross-device sync to start working.
+    for (const id of this.file.order) this._autoProvisionSync(this.file.profiles[id]);
+
     return this.data;
+  },
+
+  /* Gives a profile a pairing code and pushes its first snapshot, unless it
+     already has one or a grown-up deliberately turned sync off for it. Safe
+     to call on any profile, active or not — reconcileSync() takes the
+     profile explicitly rather than assuming this.data, so provisioning a
+     profile that isn't currently active never touches the wrong save. */
+  _autoProvisionSync(profile) {
+    if (!profile || profile.sync.localOnly || profile.sync.code) return;
+    profile.sync.code = this._syncCode();
+    this._saveLocalOnly();
+    this.reconcileSync(profile);
   },
 
   _syncActive() {
@@ -168,12 +191,36 @@ const Store = {
   },
 
   save() {
+    this._saveLocalOnly();
+    this._scheduleSync();
+  },
+
+  /* The localStorage write alone, no network follow-up. localStorage stays
+     the thing every call site actually reads and writes; sync is layered on
+     top opportunistically, never a requirement for save() to "succeed". Used
+     directly (instead of save()) by the sync round trip itself so a
+     reconcile's own bookkeeping write doesn't schedule another reconcile. */
+  _saveLocalOnly() {
     try {
       this.file.v = SAVE_VERSION;
       localStorage.setItem(SAVE_KEY, JSON.stringify(this.file));
     } catch (e) {
       console.warn("Could not write the save file.", e);
     }
+  },
+
+  /* Every save() now doubles as "something changed, worth telling the
+     server" — debounced so a burst of writes (typing out a routine, tapping
+     through the studio) costs one round trip, not one per keystroke. A
+     no-op for a profile that's local-only or hasn't been provisioned yet. */
+  _scheduleSync() {
+    if (!this.data || !this.data.sync || !this.data.sync.code) return;
+    clearTimeout(this._syncTimer);
+    this._syncTimer = setTimeout(() => this.reconcileSync(), 2000);
+    // Node's Timeout (unlike a browser's numeric handle) keeps the event loop
+    // alive until it fires — irrelevant in a page, but it turns a background
+    // sync into something that stalls process exit in tests/scripts.
+    if (this._syncTimer && typeof this._syncTimer.unref === "function") this._syncTimer.unref();
   },
 
   /* ---- profiles ---- */
@@ -191,6 +238,7 @@ const Store = {
     if (stage === "explorer") p.stage = "explorer";
     this.file.profiles[p.id] = p;
     this.file.order.push(p.id);
+    this._autoProvisionSync(p);
     this.save();
     return p;
   },
@@ -229,6 +277,7 @@ const Store = {
     fresh.id = id;
     this.file.profiles[id] = fresh;
     this._syncActive();
+    this._autoProvisionSync(this.data);
     this.save();
   },
 
@@ -239,6 +288,7 @@ const Store = {
     this.file.order = [p.id];
     this.file.activeId = p.id;
     this._syncActive();
+    this._autoProvisionSync(this.data);
     this.save();
   },
 
@@ -509,7 +559,7 @@ const Store = {
     this.load();
   },
 
-  /* ---- cross-device sync (opt-in — see HANDOFF-ARCHITECTURE.md) ----
+  /* ---- cross-device sync (on by default — see HANDOFF-ARCHITECTURE.md) ----
      Whole-profile snapshots, timestamp-wins, never per-field merging: a
      single child can't play on two devices at the same instant, so a real
      conflict is a near-impossible edge case, and that's worth the
@@ -517,7 +567,9 @@ const Store = {
      localStorage stays the thing gameplay actually reads and writes; this
      only ever updates it opportunistically alongside that, and silently
      does nothing if there's no network or no sync server (the offline,
-     zero-server folder copy of this game keeps working exactly as before). */
+     zero-server folder copy of this game keeps working exactly as before).
+     "Opt-in" flipped to "opt-out" with the localOnly flag on the profile:
+     _autoProvisionSync() gives every profile a code unless that's set. */
 
   _syncCode() {
     const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I — easier to read aloud or type in
@@ -527,20 +579,41 @@ const Store = {
   },
 
   /* id and sync bookkeeping are always locally controlled — an incoming
-     snapshot from another device only ever replaces the gameplay content. */
-  _adoptSnapshot(json) {
-    const localId = this.data.id;
-    const localSync = this.data.sync;
+     snapshot from another device only ever replaces the gameplay content.
+     Takes the profile explicitly (defaulting to the active one) so the
+     load()-time provisioning sweep can reconcile a profile that isn't
+     active without disturbing this.data. */
+  _adoptSnapshot(json, profile) {
+    const p = profile || this.data;
+    const localId = p.id;
+    const localSync = p.sync;
     const incoming = JSON.parse(json);
-    Object.assign(this.data, incoming);
-    this.data.id = localId;
-    this.data.sync = localSync;
-    this.save();
+    Object.assign(p, incoming);
+    p.id = localId;
+    p.sync = localSync;
+    this._saveLocalOnly();
+  },
+
+  /* Turns sync on (or off) for the active profile — the Settings-page
+     "Play offline only" toggle. Turning it back on re-provisions a fresh
+     code rather than resurrecting the old one, matching rotateSyncCode()'s
+     reasoning: a code that's been sitting disabled has had more chances to
+     leak than one just generated. */
+  setLocalOnly(flag) {
+    if (flag) {
+      this.disableSync();
+      this.data.sync.localOnly = true;
+      this.save();
+    } else {
+      this.data.sync.localOnly = false;
+      this.enableSync();
+    }
   },
 
   enableSync() {
     this.data.sync.code = this._syncCode();
-    this.save();
+    this.data.sync.localOnly = false;
+    this._saveLocalOnly();
     this.reconcileSync();
     return this.data.sync.code;
   },
@@ -570,6 +643,7 @@ const Store = {
       const { snapshot } = await res.json();
       this._adoptSnapshot(snapshot);
       this.data.sync.code = code;
+      this.data.sync.localOnly = false;
       this.data.sync.lastSyncedAt = Date.now();
       this.save();
       return true;
@@ -578,22 +652,27 @@ const Store = {
     }
   },
 
-  /* The push/pull round trip. No-ops silently if this profile hasn't opted
-     into sync, or the server isn't reachable. */
-  async reconcileSync() {
-    const code = this.data.sync.code;
+  /* The push/pull round trip. No-ops silently if this profile hasn't been
+     provisioned (or was deliberately set local-only), or the server isn't
+     reachable. Takes an explicit profile, defaulting to the active one, so
+     _autoProvisionSync() can drive this for a profile that isn't active —
+     e.g. provisioning every profile at load(), not just whichever one is
+     open on this device. */
+  async reconcileSync(profile) {
+    const p = profile || this.data;
+    const code = p.sync.code;
     if (!code) return;
     try {
       const res = await fetch(`/api/profiles/${code}/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ snapshot: JSON.stringify(this.data), updatedAt: Date.now() })
+        body: JSON.stringify({ snapshot: JSON.stringify(p), updatedAt: Date.now() })
       });
       if (!res.ok) return;
       const result = await res.json();
-      if (result.pulled) this._adoptSnapshot(result.snapshot);
-      this.data.sync.lastSyncedAt = Date.now();
-      this.save();
+      if (result.pulled) this._adoptSnapshot(result.snapshot, p);
+      p.sync.lastSyncedAt = Date.now();
+      this._saveLocalOnly();
     } catch {
       // offline, or the sync server isn't there — fine, this is retried next trigger
     }

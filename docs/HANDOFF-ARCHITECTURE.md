@@ -226,3 +226,29 @@ sharing authority rather than staying a disposable mirror. What shipped:
 
 Nothing here touched `js/words.js` — flagging that explicitly for the
 curriculum specialist, same as `HANDOFF-PARENTS.md` did.
+
+**Addendum: sync flipped from opt-in to opt-out.** The project owner wanted
+sync to be the primary mode, not a dashboard setting a grown-up has to
+discover — "no matter what device we use, it has the latest profiles and
+avatar designs" — with "run local-only" as the deliberate toggle instead.
+Shipped as: every profile gets a pairing code the moment it exists
+(`Store._autoProvisionSync()`, called from `load()` for every profile in the
+file — not just the active one — and from `createProfile()`), and
+`Store.save()` itself now debounces a `reconcileSync()` push, so syncing
+piggybacks on the one chokepoint nearly every mutation already calls instead
+of requiring each call site to remember to trigger it (that gap was real: the
+old wiring only synced after Focus-tab edits, never after a session's stars
+or an avatar purchase). Existing profiles from before this shipped are
+auto-provisioned too, on their next load — the project owner explicitly chose
+that over a one-time consent prompt or leaving old profiles opted out. A new
+`sync.localOnly` flag is the opt-out, flipped from Settings ("Play offline
+only"); `_autoProvisionSync()` respects it and leaves a local-only profile
+alone. Invariant §8.1 (offline mode keeps working) and §8.2 (no data leaves
+the household's own infra) are both unaffected — this only changes the
+default polarity of an already-self-hosted, already-fire-and-forget
+mechanism, not what it talks to or whether offline play still works.
+**Unchanged, and worth being explicit about:** there is still no account
+system, so a device that has never seen a given profile still needs that
+profile's pairing code once (`Store.linkWithCode()`) to link to it —
+"automatic" describes what happens after that one pairing step, not
+discovery across an arbitrary unpaired device.

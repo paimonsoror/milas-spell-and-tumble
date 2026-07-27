@@ -65,9 +65,12 @@ function init() {
 
   if (Store.firstRun) showScreen("profiles");
 
-  // opportunistic and fire-and-forget — no-ops instantly if this profile
-  // never opted into sync, and silently does nothing if there's no network
-  // or no sync server, so the offline folder copy of this game is unaffected
+  // opportunistic and fire-and-forget — no-ops instantly if this profile is
+  // set to play offline only, and silently does nothing if there's no
+  // network or no sync server, so the offline folder copy of this game is
+  // unaffected. Store.load() already auto-provisioned a code for every
+  // profile in the file if one didn't exist yet — this is just the first
+  // real push/pull for whichever one is active on this device.
   Store.reconcileSync();
 }
 
@@ -2332,14 +2335,14 @@ function renderListsTab() {
 }
 
 function renderSyncSection(sync) {
-  if (!sync.code) {
+  if (sync.localOnly) {
     return `
-      <p class="muted">Turn this on to check this profile's progress from another device,
-         or to keep two devices in sync. Off by default — nothing leaves this browser until you do.</p>
+      <p class="muted">${escapeHtml(playerName())} is set to play offline only — nothing about
+         this profile leaves this device.</p>
       <div class="row">
-        <button class="btn small teal" id="sync-enable">Turn on sync</button>
+        <button class="btn small teal" id="sync-enable">Turn sync back on</button>
       </div>
-      <p class="muted" style="font-size:13px;margin-top:14px">Already have a code from another device?</p>
+      <p class="muted" style="font-size:13px;margin-top:14px">Setting up a device that already has this profile's code?</p>
       <div class="row">
         <input type="text" class="text-line" id="sync-link-code" maxlength="6" placeholder="ABC123" style="width:140px;text-transform:uppercase">
         <button class="btn small ghost" id="sync-link">Link this device</button>
@@ -2351,16 +2354,18 @@ function renderSyncSection(sync) {
     : "not yet";
 
   return `
-    <p class="muted">This profile syncs with any device that has this code — keep it private,
-       anyone with it can view or link this profile's progress.</p>
+    <p class="muted">Every profile syncs automatically — ${escapeHtml(playerName())}'s stars, avatar and
+       progress follow her to any device that has this code. Keep it private: anyone with it can view
+       or link this profile.</p>
     <div class="row">
-      <span class="answer" id="sync-code-display">${escapeHtml(sync.code)}</span>
+      <span class="answer" id="sync-code-display">${escapeHtml(sync.code || "…")}</span>
       <button class="btn small ghost" id="sync-copy">Copy remote link</button>
     </div>
     <p class="muted" style="font-size:13px">Last synced: ${last}</p>
+    <p class="muted" style="font-size:13px;margin-top:14px">On a new device? Enter this code there under "Link this device."</p>
     <div class="row" style="margin-top:8px">
       <button class="btn small ghost" id="sync-regenerate">Regenerate code</button>
-      <button class="btn small ghost" id="sync-disable">Turn off sync</button>
+      <button class="btn small ghost" id="sync-disable">Play offline only</button>
     </div>`;
 }
 
@@ -2453,7 +2458,7 @@ function renderSettingsTab() {
       <input type="file" id="set-import-file" accept="application/json" style="display:none">
     </div>
 
-    <h3 style="margin-top:24px">Sync across devices</h3>
+    <h3 style="margin-top:24px">Playing on other devices</h3>
     ${renderSyncSection(Store.data.sync)}
 
     <h3 style="margin-top:24px">Danger zone</h3>
@@ -2525,9 +2530,9 @@ function renderSettingsTab() {
   });
 
   bind("#sync-enable", "click", () => {
-    Store.enableSync();
+    Store.setLocalOnly(false);
     renderSettingsTab();
-    toast("Sync turned on.");
+    toast("Sync turned back on.");
   });
   bind("#sync-regenerate", "click", () => {
     if (!confirm("The old code will stop working on any other linked device. Continue?")) return;
@@ -2536,9 +2541,10 @@ function renderSettingsTab() {
     toast("New code generated.");
   });
   bind("#sync-disable", "click", () => {
-    Store.disableSync();
+    if (!confirm(`${playerName()}'s progress will stop leaving this device — any other linked device keeps whatever it last saw. Continue?`)) return;
+    Store.setLocalOnly(true);
     renderSettingsTab();
-    toast("Sync turned off.");
+    toast("Playing offline only now.");
   });
   bind("#sync-copy", "click", () => {
     const url = `${location.origin}${location.pathname}?code=${Store.data.sync.code}`;

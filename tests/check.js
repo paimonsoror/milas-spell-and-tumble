@@ -17,7 +17,7 @@ const ctx = vm.createContext({
   performance: { now: () => clock.t },
   requestAnimationFrame: (cb) => { clock.queue.push({ id: clock.next, cb }); return clock.next++; },
   cancelAnimationFrame: (id) => { clock.queue = clock.queue.filter((j) => j.id !== id); },
-  setTimeout, setImmediate, queueMicrotask, Promise,
+  setTimeout, clearTimeout, setImmediate, queueMicrotask, Promise,
   // no real network in tests — simulates "offline / no sync server", which
   // reconcileSync()'s own try/catch must swallow without throwing
   fetch: () => Promise.reject(new Error("no network in tests"))
@@ -314,8 +314,11 @@ ok(ctx.Store.isOwned("bow", "small"), "free items are owned after migrating an o
 ok(ctx.Store.data.prefs && ctx.Store.data.prefs.reviewMix === 0.34, "an old save gains the prefs default review mix");
 ok(Object.keys(ctx.Store.data.prefs.pinned).length === 0, "an old save gains an empty pinned list");
 ok(ctx.Store.data.prefs.focusNote === "", "an old save gains an empty focus note");
-ok(ctx.Store.data.sync && ctx.Store.data.sync.code === null, "an old save gains sync, opted out by default");
-ok(ctx.Store.data.sync.lastSyncedAt === null, "an old save's sync has never synced");
+ok(ctx.Store.data.sync && /^[A-Z0-9]{6}$/.test(ctx.Store.data.sync.code),
+   "an old save gains sync, auto-provisioned by default rather than opted out");
+ok(ctx.Store.data.sync.localOnly === false, "an old save is not local-only by default");
+ok(ctx.Store.data.sync.lastSyncedAt === null,
+   "an old save's provisioning push doesn't count as 'synced' when the server is unreachable");
 ok(ctx.Store.data.stage === "speller", "an old save defaults to the speller stage — never silently downgraded");
 ok(ctx.Store.data.earlyLearner && ctx.Store.data.earlyLearner.level === "upper", "an old save gains the earlyLearner bucket");
 ok(Object.keys(ctx.Store.data.earlyLearner.letters).length === 0, "an old save's earlyLearner starts with no letter history");
@@ -330,6 +333,37 @@ ok(Object.keys(ctx.Store.data.earlyLearner.letters).length === 0, "an old save's
 
   const linked = await ctx.Store.linkWithCode("NOPE99");
   ok(linked === false, "linkWithCode() resolves false, rather than throwing, when the server is unreachable");
+}
+
+/* ---- sync is opt-out, not opt-in ---- */
+{
+  const before = ctx.Store.data.sync.code;
+  ctx.Store.setLocalOnly(true);
+  ok(ctx.Store.data.sync.localOnly === true, "setLocalOnly(true) marks the profile local-only");
+  ok(ctx.Store.data.sync.code === null, "setLocalOnly(true) clears the pairing code");
+
+  ctx.Store.data = null;
+  ctx.Store.load();
+  ok(ctx.Store.data.sync.localOnly === true && ctx.Store.data.sync.code === null,
+     "a local-only profile is not re-provisioned by a later load()");
+
+  ctx.Store.setLocalOnly(false);
+  ok(ctx.Store.data.sync.localOnly === false, "setLocalOnly(false) clears local-only");
+  ok(/^[A-Z0-9]{6}$/.test(ctx.Store.data.sync.code) && ctx.Store.data.sync.code !== before,
+     "setLocalOnly(false) provisions a fresh code rather than reusing the disabled one");
+}
+
+// every profile gets its own code automatically — not just whichever one is active
+{
+  const fresh = ctx.Store.createProfile("Jamie");
+  ok(/^[A-Z0-9]{6}$/.test(fresh.sync.code), "a brand-new profile is auto-provisioned immediately, before any reload");
+
+  ctx.Store.data = null;
+  ctx.Store.load();
+  const codes = ctx.Store.profiles().map((p) => p.sync.code);
+  ok(codes.every((c) => /^[A-Z0-9]{6}$/.test(c)), "every profile has a code after load(), not just the active one");
+  ok(new Set(codes).size === codes.length, "auto-provisioned codes don't collide across profiles");
+  ctx.Store.deleteProfile(fresh.id);
 }
 
 /* ---- selectReviewPool ---- */
