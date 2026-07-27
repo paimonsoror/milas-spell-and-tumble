@@ -23,14 +23,15 @@ const ctx = vm.createContext({
   fetch: () => Promise.reject(new Error("no network in tests"))
 });
 const src =
-  ["words.js", "avatar.js", "skills.js", "store.js"].map((f) => fs.readFileSync(path + f, "utf8")).join("\n") +
+  ["words.js", "letters.js", "avatar.js", "skills.js", "store.js"].map((f) => fs.readFileSync(path + f, "utf8")).join("\n") +
   "\n;globalThis.__done = (" + tests.toString() + ")();";
 
 async function tests() {
 const ctx = {
   SKILLS, IDLE, EASINGS, NEUTRAL_POSE, poseFrom, skillsForSport, chooseSkill,
   CATALOG, SKIN_TONES, DEFAULT_LOOK, Store, parseWordList, WORD_LISTS, GRADE_ORDER,
-  Animator, SKILL_BY_ID, dayKey, daysBetween
+  Animator, SKILL_BY_ID, dayKey, daysBetween,
+  LETTERS, LETTER_BY_ID, LETTER_LEVELS, nextLetterLevel, chooseOptionCount, selectLetterPool
 };
 
 let fails = 0;
@@ -315,6 +316,9 @@ ok(Object.keys(ctx.Store.data.prefs.pinned).length === 0, "an old save gains an 
 ok(ctx.Store.data.prefs.focusNote === "", "an old save gains an empty focus note");
 ok(ctx.Store.data.sync && ctx.Store.data.sync.code === null, "an old save gains sync, opted out by default");
 ok(ctx.Store.data.sync.lastSyncedAt === null, "an old save's sync has never synced");
+ok(ctx.Store.data.stage === "speller", "an old save defaults to the speller stage — never silently downgraded");
+ok(ctx.Store.data.earlyLearner && ctx.Store.data.earlyLearner.level === "upper", "an old save gains the earlyLearner bucket");
+ok(Object.keys(ctx.Store.data.earlyLearner.letters).length === 0, "an old save's earlyLearner starts with no letter history");
 
 /* ---- cross-device sync: must never throw or block when offline ---- */
 {
@@ -347,6 +351,96 @@ ok(ctx.Store.data.sync.lastSyncedAt === null, "an old save's sync has never sync
   const retired = ctx.Store.selectReviewPool(list, { pinned: { cat: "retire" } }, statsWords);
   ok(!retired.hard.some((p) => p[0] === "cat"), "a retired word is excluded from the hard pool");
   ok(retired.rest.some((p) => p[0] === "cat"), "a retired word still appears in rest, not removed from her curriculum");
+}
+
+/* ---- early-learner letters content ---- */
+{
+  ok(ctx.LETTERS.length === 26, `26 letters (got ${ctx.LETTERS.length})`);
+  const ids = ctx.LETTERS.map((l) => l.id);
+  ok(new Set(ids).size === 26, "letter ids unique");
+  for (const l of ctx.LETTERS) {
+    ok(/^[A-Z]$/.test(l.upper) && l.upper === l.id, `${l.id} upper is a single matching capital`);
+    ok(l.lower === l.upper.toLowerCase(), `${l.id} lower matches upper`);
+    ok(typeof l.clueWord === "string" && l.clueWord.length > 1, `${l.id} has a clue word`);
+  }
+  ok(ctx.LETTER_LEVELS.join(",") === "upper,lower,sound", "levels run upper -> lower -> sound");
+
+  /* ---- chooseOptionCount ---- */
+  ok(ctx.chooseOptionCount(0, 0) === 3, "starts at 3 choices");
+  ok(ctx.chooseOptionCount(6, 0) === 4, "a streak of 6 raises the ceiling to 4");
+  ok(ctx.chooseOptionCount(6, 2) === 2, "two misses in a row drop it back down, even mid-streak");
+  ok(ctx.chooseOptionCount(0, 2) === 2, "struggling drops it to the easiest, 2 choices");
+
+  /* ---- nextLetterLevel ---- */
+  const fresh = { level: "upper", levelProgress: { upper: { attempts: 0, right: 0 }, lower: { attempts: 0, right: 0 }, sound: { attempts: 0, right: 0 } } };
+  ok(ctx.nextLetterLevel(fresh) === "upper", "no progress yet stays on upper");
+  const almost = { level: "upper", levelProgress: { upper: { attempts: 39, right: 39 }, lower: { attempts: 0, right: 0 }, sound: { attempts: 0, right: 0 } } };
+  ok(ctx.nextLetterLevel(almost) === "upper", "not enough reps yet, even at perfect accuracy, stays on upper");
+  const shaky = { level: "upper", levelProgress: { upper: { attempts: 40, right: 20 }, lower: { attempts: 0, right: 0 }, sound: { attempts: 0, right: 0 } } };
+  ok(ctx.nextLetterLevel(shaky) === "upper", "enough reps but weak accuracy stays on upper");
+  const ready = { level: "upper", levelProgress: { upper: { attempts: 40, right: 33 }, lower: { attempts: 0, right: 0 }, sound: { attempts: 0, right: 0 } } };
+  ok(ctx.nextLetterLevel(ready) === "lower", "enough reps at 80%+ graduates upper -> lower");
+  const topped = { level: "sound", levelProgress: { upper: { attempts: 40, right: 40 }, lower: { attempts: 40, right: 40 }, sound: { attempts: 40, right: 40 } } };
+  ok(ctx.nextLetterLevel(topped) === "sound", "sound is the top level — mastering it doesn't advance further");
+
+  /* ---- selectLetterPool ---- */
+  const noProgress = ctx.selectLetterPool(ctx.LETTERS, {}, 8);
+  ok(noProgress.length === 8, `selectLetterPool returns the requested count (got ${noProgress.length})`);
+  ok(new Set(noProgress).size === 8, "selectLetterPool never repeats a letter within a round");
+  ok(noProgress.every((id) => ctx.LETTER_BY_ID[id]), "every picked id is a real letter");
+
+  const all26 = ctx.selectLetterPool(ctx.LETTERS, {}, 26);
+  ok(all26.length === 26, "selectLetterPool can fill a round the size of the whole alphabet");
+
+  // a letter she's shaky on should come up more often than one she's mastered
+  const skewedProgress = { A: { seen: 20, right: 2, wrong: 18 }, B: { seen: 20, right: 20, wrong: 0 } };
+  let aCount = 0, bCount = 0;
+  for (let i = 0; i < 300; i++) {
+    const pool = ctx.selectLetterPool(ctx.LETTERS, skewedProgress, 6);
+    if (pool.includes("A")) aCount++;
+    if (pool.includes("B")) bCount++;
+  }
+  ok(aCount > bCount, `a shaky letter (${aCount}/300) is weighted above a mastered one (${bCount}/300)`);
+}
+
+/* ---- Store: explorer track ---- */
+{
+  ctx.Store.resetAll();
+  ok(ctx.Store.data.stage === "speller", "a fresh profile defaults to speller");
+
+  ctx.Store.setStage("explorer");
+  ok(ctx.Store.data.stage === "explorer", "setStage switches the active profile");
+  ctx.Store.setStage("nonsense");
+  ok(ctx.Store.data.stage === "speller", "an unrecognised stage falls back to speller, not left invalid");
+  ctx.Store.setStage("explorer");
+
+  const pool = ctx.Store.selectLetterPoolForRound(8);
+  ok(pool.length === 8 && new Set(pool).size === 8, "selectLetterPoolForRound draws 8 distinct letters");
+
+  ctx.Store.recordLetterAttempt("A", "upper", true);
+  ctx.Store.recordLetterAttempt("A", "upper", false);
+  ok(ctx.Store.data.earlyLearner.letters.A.seen === 2, "per-letter attempts accumulate");
+  ok(ctx.Store.data.earlyLearner.letters.A.right === 1 && ctx.Store.data.earlyLearner.letters.A.wrong === 1, "right/wrong tracked per letter");
+  ok(ctx.Store.data.earlyLearner.levelProgress.upper.attempts === 2, "level progress accumulates alongside per-letter stats");
+
+  for (let i = 0; i < 40; i++) ctx.Store.recordLetterAttempt("B", "upper", true);
+  ok(ctx.Store.data.earlyLearner.level === "lower", "enough solid reps at a level auto-advances it");
+
+  ctx.Store.setLetterLevel("sound");
+  ok(ctx.Store.data.earlyLearner.level === "sound", "a grown-up can override the level directly");
+  ctx.Store.setLetterLevel("bogus");
+  ok(ctx.Store.data.earlyLearner.level === "sound", "an unrecognised level is ignored, not applied");
+
+  const beforeRounds = ctx.Store.data.earlyLearner.roundsCompleted;
+  ctx.Store.finishLetterRound();
+  ok(ctx.Store.data.earlyLearner.roundsCompleted === beforeRounds + 1, "finishing a round counts it");
+
+  const explorerKid = ctx.Store.createProfile("Tiny", "explorer");
+  ok(explorerKid.stage === "explorer", "createProfile can set the stage of a brand-new profile");
+  ok(ctx.Store.data.stage === "explorer", "creating a profile doesn't switch to it or touch the active one's stage");
+  ctx.Store.deleteProfile(explorerKid.id);
+
+  ctx.Store.setStage("speller"); // leave the fixture profile as the later tests below expect
 }
 
 // export/import must round-trip every player

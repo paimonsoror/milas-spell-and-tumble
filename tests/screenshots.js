@@ -94,6 +94,49 @@ const drivers = {
     document.querySelector('.cat-tab[data-slot="bow"]').click();
     document.querySelector('.item[data-slot="bow"][data-id="crown"]').click();`,
 
+  "explorer-home": `
+    Store.setStage('explorer');
+    refreshHome();
+    showScreen('home');`,
+
+  "letters-play": `
+    Store.setStage('explorer');
+    startLetterRound();`,
+
+  "letters-tap-wrong": `
+    Store.setStage('explorer');
+    startLetterRound();
+    setTimeout(() => {
+      const item = currentLetterItem();
+      const wrongBtn = document.querySelector('.letter-choice:not([data-letter="' + item.id + '"])');
+      if (wrongBtn) wrongBtn.click();
+    }, 900);`,
+
+  "letters-summary": `
+    Store.setStage('explorer');
+    startLetterRound();
+    setTimeout(() => {
+      letterSession.results = letterSession.queue.map((id) => ({ id, firstTry: true }));
+      letterSession.correct = letterSession.queue.length;
+      letterSession.bestStreak = letterSession.queue.length;
+      letterSession.stars = letterSession.queue.length;
+      finishLetterRound();
+    }, 900);`,
+
+  "letters-parents": `
+    Store.setStage('explorer');
+    ['A','B','C','D','E'].forEach((id) => {
+      for (let i = 0; i < 5; i++) Store.recordLetterAttempt(id, 'upper', i % 4 !== 0);
+    });
+    parentsUnlocked = true;
+    showScreen('parents'); renderParents();`,
+
+  "letters-parents-settings": `
+    Store.setStage('explorer');
+    parentsUnlocked = true;
+    showScreen('parents'); renderParents();
+    document.querySelector('.tab[data-tab="settings"]').click();`,
+
   parents: `
     const words = ['beautiful','because','straight','gymnast','ribbon','practice','favorite','balance','listen','medal'];
     words.forEach((w, i) => {

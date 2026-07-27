@@ -8,7 +8,10 @@ const sfx = new Sfx();
 
 let arena = null;   // { gymnast, animator }
 let studio = null;  // { gymnast, animator }
+let lettersArena = null; // { gymnast, animator } — the early-learner track's own stage, see startLetterRound()
 let session = null;
+let letterSession = null;
+let newProfileStage = "speller"; // set by the picker in renderProfiles(), read when a profile is created
 let parentsUnlocked = false;
 // true only in the ?code=XXXXXX remote-view boot path (see initRemoteView) —
 // a parent looking at a synced profile from another device, read-only,
@@ -43,10 +46,18 @@ function init() {
   studio.gymnast.setLook(Store.data.look);
   studio.animator.idle();
 
+  // stationary, like the studio figure — the letters track never needs
+  // travel, so it borrows the same "lock her in place" bounds trick
+  const lG = new Gymnast($("#letters-gymnast"), { x: 350, y: 250, zoom: 1.25 });
+  lettersArena = { gymnast: lG, animator: new Animator(lG, { min: 340, max: 360 }) };
+  lettersArena.gymnast.setLook(Store.data.look);
+  lettersArena.animator.idle();
+
   wireNav();
   wireSetup();
   wireGame();
   wireStudio();
+  wireLetters();
   wireVoice();
   wireProfiles();
   wireParents();
@@ -104,6 +115,7 @@ function applyProfileSettings() {
   setTimeout(() => speaker.applyProfile(Store.data.settings), 700);
   if (arena) arena.gymnast.setLook(Store.data.look);
   if (studio) studio.gymnast.setLook(Store.data.look);
+  if (lettersArena) lettersArena.gymnast.setLook(Store.data.look);
   document.title = `${Store.data.name}'s Spell & Tumble Championship`;
   // every player keeps their own day streak, so this follows the switch
   visitInfo = Store.registerVisit();
@@ -156,6 +168,7 @@ function showScreen(name) {
   $$(".screen").forEach((s) => s.classList.toggle("active", s.id === "screen-" + name));
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (name !== "studio") clearPreview(); // never carry a try-on out of the studio
+  if (name !== "letters" && letterSession) { speaker.cancel(); letterSession = null; }
   if (name === "studio") refreshStudio();
   if (name === "home") refreshHome();
   if (name === "voice") renderVoice();
@@ -168,6 +181,7 @@ function wireNav() {
     if (!el) return;
     const dest = el.dataset.go;
     if (dest === "setup") openSetup(el.dataset.mode || Store.data.settings.mode);
+    else if (dest === "letters") startLetterRound();
     else showScreen(dest);
   });
 
@@ -300,6 +314,11 @@ function refreshHome() {
   $("#home-stars").textContent = Store.data.stars;
   $("#home-welcome").innerHTML = welcomeHtml();
   paintGoal($("#home-goal"));
+  // which tiles show depends on stage, not word-list grade — see
+  // HANDOFF-EARLY-LEARNER.md. The class only toggles visibility in CSS,
+  // nothing here rebuilds the tile markup.
+  const grid = $(".home-grid");
+  if (grid) grid.classList.toggle("explorer", Store.data.stage === "explorer");
   const m = Store.data.medals;
   const b = Store.data.best;
   const parts = [];
@@ -346,9 +365,10 @@ function wireProfiles() {
     if (Store.firstRun) {
       // the blank first-run profile gets named rather than duplicated
       Store.renameProfile(Store.file.activeId, name);
+      Store.setStage(newProfileStage);
       Store.firstRun = false;
     } else {
-      const p = Store.createProfile(name);
+      const p = Store.createProfile(name, newProfileStage);
       Store.switchProfile(p.id);
     }
     applyProfileSettings();
@@ -386,13 +406,33 @@ function renderProfiles() {
         .join("");
 
   $("#profile-new").innerHTML = `
-    <div class="slider-row" style="margin-top:${first ? 0 : 16}px">
+    <div class="field" style="margin-top:${first ? 0 : 16}px;margin-bottom:14px">
+      <label>What kind of player?</label>
+      <div class="choices" id="profile-stage-choice">
+        <button type="button" class="choice" data-stage="speller" aria-pressed="true">
+          <span class="emoji">🎀</span><b>Big Kid</b><small>Reading &amp; spelling words</small></button>
+        <button type="button" class="choice" data-stage="explorer" aria-pressed="false">
+          <span class="emoji">🔤</span><b>Little Learner</b><small>Letters &amp; sounds</small></button>
+      </div>
+    </div>
+    <div class="slider-row">
       <label for="profile-name">${first ? "Your name" : "New player"}</label>
       <input type="text" class="text-line" id="profile-name" maxlength="18"
              placeholder="Type a name" style="flex:1 1 200px" autocomplete="off">
       <button class="btn" id="btn-profile-create">${first ? "Let's go! 🎀" : "＋ Add player"}</button>
     </div>
     ${first ? "" : '<div class="row center" style="margin-top:10px"><button class="btn ghost small" data-go="home">← Back</button></div>'}`;
+
+  // resets on every render — a new profile always starts from "Big Kid"
+  // pre-selected, so an existing parent adding a second, older player never
+  // has to touch this to get the experience they already expect
+  newProfileStage = "speller";
+  $("#profile-stage-choice").addEventListener("click", (e) => {
+    const b = e.target.closest(".choice");
+    if (!b) return;
+    newProfileStage = b.dataset.stage;
+    $$(".choice", $("#profile-stage-choice")).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  });
 
   const input = $("#profile-name");
   input.addEventListener("keydown", (e) => {
@@ -1259,6 +1299,225 @@ function renderResults(s, summary, judges, medal) {
 }
 
 /* ============================================================
+   letter play (early-learner track — HANDOFF-EARLY-LEARNER.md)
+
+   Deliberately its own session object and its own screen rather than a bent
+   version of `session`/session.phase: that machinery is tightly wired around
+   typing a whole word, and retrofitting letter-level recognition into it was
+   more likely to break the existing flow than to save time building this.
+   ============================================================ */
+
+const LETTER_ROUND_LEN = 8;
+const LETTER_LEVEL_LABEL = { upper: "Uppercase letters", lower: "Lowercase letters", sound: "Letter sounds" };
+
+function currentLetterItem() {
+  return LETTER_BY_ID[letterSession.queue[letterSession.index]];
+}
+
+function startLetterRound() {
+  const ids = Store.selectLetterPoolForRound(LETTER_ROUND_LEN);
+  letterSession = {
+    level: Store.data.earlyLearner.level,
+    queue: ids,
+    index: 0,
+    correct: 0,
+    wrong: 0,
+    streak: 0,
+    missStreak: 0,
+    bestStreak: 0,
+    stars: 0,
+    lastSkillId: null,
+    results: [],
+    firstTry: true
+  };
+  $("#letters-summary").style.display = "none";
+  $("#letters-dots").innerHTML = "";
+  lettersArena.gymnast.setLook(Store.data.look);
+  showScreen("letters");
+  sfx.whistle();
+  setTimeout(nextLetterItem, 500);
+}
+
+function nextLetterItem() {
+  if (!letterSession) return;
+  if (letterSession.index >= letterSession.queue.length) {
+    finishLetterRound();
+    return;
+  }
+  letterSession.firstTry = true;
+  $("#letters-stars").textContent = Store.data.stars;
+  renderLetterChoices();
+  speakLetterPrompt();
+}
+
+function renderLetterChoices() {
+  const item = currentLetterItem();
+  const level = letterSession.level;
+  const count = chooseOptionCount(letterSession.streak, letterSession.missStreak);
+  const distractors = shuffleLetters(LETTERS.filter((l) => l.id !== item.id)).slice(0, count - 1);
+  const options = shuffleLetters([item, ...distractors]);
+  const glyph = (l) => (level === "lower" ? l.lower : l.upper);
+
+  $("#letters-feedback").textContent = "";
+  $("#letters-choices").innerHTML = options
+    .map((l) => `<button class="letter-choice" data-letter="${l.id}">${escapeHtml(glyph(l))}</button>`)
+    .join("");
+}
+
+/* Sets the prompt text and, when speech is available, speaks it. Also the
+   "hear it again" handler. When speech is missing or muted, the fallback
+   is an on-screen flashcard of the target letter rather than flashed text
+   describing it — a legitimate visual-matching version of the same task,
+   the way revealWordBriefly() flashes a word for the spelling track. The
+   "sound" level has no visual equivalent of a phoneme, so it falls back to
+   the same flashcard rather than leaving her with no task at all. */
+function speakLetterPrompt() {
+  const item = currentLetterItem();
+  const level = letterSession.level;
+
+  if (!speaker.supported || !speaker.enabled) {
+    const glyph = level === "lower" ? item.lower : item.upper;
+    $("#letters-prompt").innerHTML =
+      `Find this one: <span style="font-family:var(--font-letters)">${escapeHtml(glyph)}</span>`;
+    return;
+  }
+
+  $("#letters-prompt").textContent =
+    level === "sound" ? `Which letter starts "${item.clueWord}"?` : "Listen, then tap the letter!";
+  const phrase =
+    level === "sound"
+      ? `Which letter makes the first sound in the word "${item.clueWord}"?`
+      : `Find the letter ${item.upper}.`;
+  speaker.cancel();
+  speaker.say(phrase);
+}
+
+function updateLetterDots() {
+  $("#letters-dots").innerHTML = letterSession.results
+    .map((r) => `<i class="${r.firstTry ? "on" : "fixed"}"></i>`)
+    .join("");
+}
+
+function letterCheer() {
+  const cheers = ["Yes!", "You got it!", "Perfect!", "Great eyes!", "Woo hoo!"];
+  return cheers[Math.floor(Math.random() * cheers.length)];
+}
+
+function pickLetter(letterId, btnEl) {
+  if (!letterSession) return;
+  const item = currentLetterItem();
+  const right = letterId === item.id;
+  const wasFirstTry = letterSession.firstTry;
+
+  if (!right) {
+    if (wasFirstTry) {
+      Store.recordLetterAttempt(item.id, letterSession.level, false);
+      letterSession.wrong++;
+      letterSession.streak = 0;
+      letterSession.missStreak++;
+      letterSession.firstTry = false;
+    }
+    sfx.wrong();
+    btnEl.classList.add("lc-wrong", "shake");
+    // only the tapped button drops out — she keeps trying the rest in
+    // place, a flatter loop than the spelling track's three-strikes climb
+    btnEl.disabled = true;
+    $("#letters-feedback").textContent = "Try another one!";
+    return;
+  }
+
+  // correct — lock the whole board, this item is done
+  $$(".letter-choice", $("#letters-choices")).forEach((b) => (b.disabled = true));
+
+  if (wasFirstTry) {
+    Store.recordLetterAttempt(item.id, letterSession.level, true);
+    letterSession.correct++;
+    letterSession.streak++;
+    letterSession.missStreak = 0;
+    letterSession.bestStreak = Math.max(letterSession.bestStreak, letterSession.streak);
+  }
+  letterSession.results.push({ id: item.id, firstTry: wasFirstTry });
+  updateLetterDots();
+
+  btnEl.classList.add("lc-right");
+  sfx.star();
+  letterSession.stars += 1;
+  Store.addStars(1);
+  $("#letters-stars").textContent = Store.data.stars;
+  $("#letters-feedback").textContent = wasFirstTry ? letterCheer() : "Now you've got it! 🌟";
+
+  // a full performance every few correct answers, not every single one —
+  // constant applause would cheapen it, and a short round has little room
+  // for a long wait between payoffs either
+  const milestone = wasFirstTry && letterSession.streak > 0 && letterSession.streak % 4 === 0;
+  if (milestone) {
+    const pool = skillsForSport(Store.data.settings.sport).filter((s) => !s.travel && s.id !== "basketToss");
+    const fresh = pool.filter((s) => s.id !== letterSession.lastSkillId);
+    const from = fresh.length ? fresh : pool;
+    const skill = from[Math.floor(Math.random() * from.length)];
+    letterSession.lastSkillId = skill.id;
+    sfx.whoosh();
+    lettersArena.animator.play(skill).then(() => {
+      burstConfetti(18, $(".letters-preview"));
+      setTimeout(advanceLetterItem, 500);
+    });
+  } else {
+    setTimeout(advanceLetterItem, wasFirstTry ? 650 : 950);
+  }
+}
+
+function advanceLetterItem() {
+  if (!letterSession) return;
+  letterSession.index++;
+  nextLetterItem();
+}
+
+function finishLetterRound() {
+  if (!letterSession) return;
+  speaker.cancel();
+  const s = letterSession;
+  Store.finishLetterRound();
+  const daily = Store.claimDailyBonus();
+  if (daily) s.stars += daily;
+
+  const total = s.results.length;
+  const acc = total ? s.correct / total : 0;
+  const icon = acc >= 0.9 ? "🌟" : acc >= 0.6 ? "💪" : "🌱";
+  const title = acc >= 0.9 ? "Amazing letter work" : acc >= 0.6 ? "Great practice" : "Nice try";
+
+  $("#letters-prompt").textContent = "";
+  $("#letters-choices").innerHTML = "";
+  $("#letters-feedback").textContent = "";
+  $("#letters-stars").textContent = Store.data.stars;
+  $("#letters-summary").style.display = "";
+  $("#letters-summary").innerHTML = `
+    <div class="medal-big">${icon}</div>
+    <h2>${escapeHtml(title)}, ${escapeHtml(playerName())}!</h2>
+    <p class="muted">${s.correct} of ${total} found · best streak ${s.bestStreak}</p>
+    <div class="row center"><span class="star-bank">⭐ +${s.stars} stars earned</span></div>
+    ${daily ? `<div class="welcome streaky" style="margin-top:10px">🔥 Daily bonus +${daily} ⭐ included!</div>` : ""}
+    <div class="row center" style="margin-top:16px">
+      <button class="btn big" id="btn-letters-again">Again! 🔁</button>
+      <button class="btn ghost" data-go="home">Home</button>
+    </div>`;
+  $("#btn-letters-again").addEventListener("click", startLetterRound);
+
+  letterSession = null;
+  refreshHome();
+}
+
+function wireLetters() {
+  $("#letters-choices").addEventListener("click", (e) => {
+    const b = e.target.closest(".letter-choice");
+    if (!b || b.disabled || !letterSession) return;
+    pickLetter(b.dataset.letter, b);
+  });
+  $("#btn-letters-say").addEventListener("click", () => {
+    if (letterSession) speakLetterPrompt();
+  });
+}
+
+/* ============================================================
    avatar studio
    ============================================================ */
 
@@ -1687,7 +1946,45 @@ function weekKey(ts) {
   return d.getTime();
 }
 
+/* Letters have no equivalent of Store.data.stats — the explorer track never
+   touches it — so an explorer profile gets its own view here instead of a
+   Progress tab full of zeroes. */
+function renderLettersProgressTab() {
+  const el = Store.data.earlyLearner;
+  const lp = el.levelProgress[el.level] || { attempts: 0, right: 0 };
+  const acc = lp.attempts ? lp.right / lp.attempts : 0;
+
+  const rows = LETTERS.map((l) => {
+    const s = el.letters[l.id];
+    const a = s && s.seen ? s.right / s.seen : null;
+    const cls = a == null ? "" : a >= 0.8 ? "" : a >= 0.5 ? "warn" : "bad";
+    return `<tr>
+      <td class="word">${l.upper}${l.lower}</td>
+      <td>${s ? s.seen : 0}</td>
+      <td style="width:26%"><div class="bar ${cls}"><i style="width:${a == null ? 0 : Math.round(a * 100)}%"></i></div></td>
+      <td>${a == null ? "—" : pct(a)}</td>
+    </tr>`;
+  }).join("");
+
+  $("#tab-progress").innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-box"><div class="k">Current level</div>
+        <div class="v" style="font-size:20px">${escapeHtml(LETTER_LEVEL_LABEL[el.level] || el.level)}</div>
+        <div class="sub">${pct(acc)} at this level</div></div>
+      <div class="stat-box"><div class="k">Rounds played</div><div class="v">${el.roundsCompleted}</div></div>
+      <div class="stat-box"><div class="k">Stars earned</div><div class="v">${Store.data.starsAllTime}</div>
+        <div class="sub">${Store.data.stars} unspent</div></div>
+    </div>
+    <p class="muted">Levels move forward on their own once she's had enough solid practice at one
+      (roughly five rounds at 80%+ accuracy). A grown-up can override the level, or switch
+      ${escapeHtml(playerName())} back to word spelling any time, from the Settings tab.</p>
+    <h3 style="margin-top:20px">Letters</h3>
+    <table class="data"><thead><tr><th>Letter</th><th>Times seen</th><th></th><th>Accuracy</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+}
+
 function renderProgressTab() {
+  if (Store.data.stage === "explorer") { renderLettersProgressTab(); return; }
   const st = Store.data.stats;
   const sessions = st.sessions.slice(-24);
   const acc = st.attempts ? st.correct / st.attempts : 0;
@@ -2084,6 +2381,32 @@ function renderSettingsTab() {
 
   $("#tab-settings").innerHTML = `
     <div class="field">
+      <label>Learning track</label>
+      <div class="choices" style="max-width:440px">
+        <button type="button" class="choice" id="stage-speller" aria-pressed="${Store.data.stage !== "explorer"}">
+          <span class="emoji">🎀</span><b>Big Kid</b><small>Reading &amp; spelling words</small></button>
+        <button type="button" class="choice" id="stage-explorer" aria-pressed="${Store.data.stage === "explorer"}">
+          <span class="emoji">🔤</span><b>Little Learner</b><small>Letters &amp; sounds</small></button>
+      </div>
+      <p class="muted" style="font-size:13px;margin-top:6px">
+        Switch any time — this only changes which games show up on ${escapeHtml(playerName())}'s home screen.</p>
+    </div>
+    ${
+      Store.data.stage === "explorer"
+        ? `<div class="field">
+             <label>Letter level</label>
+             <select class="select" id="set-letter-level">
+               <option value="upper" ${Store.data.earlyLearner.level === "upper" ? "selected" : ""}>Uppercase letters</option>
+               <option value="lower" ${Store.data.earlyLearner.level === "lower" ? "selected" : ""}>Lowercase letters</option>
+               <option value="sound" ${Store.data.earlyLearner.level === "sound" ? "selected" : ""}>Letter sounds</option>
+             </select>
+             <p class="muted" style="font-size:13px;margin-top:6px">
+               This normally moves forward by itself as she gets more of a level right — set it directly
+               if she's ready for more, or needs a bit longer somewhere.</p>
+           </div>`
+        : ""
+    }
+    <div class="field">
       <label>Default word list</label>
       <select class="select" id="set-grade">${listOptions}</select>
     </div>
@@ -2143,6 +2466,20 @@ function renderSettingsTab() {
     const el = $(id);
     if (el) el.addEventListener(ev, fn);
   };
+
+  bind("#stage-speller", "click", () => {
+    Store.setStage("speller");
+    renderSettingsTab();
+    refreshHome();
+    toast(`${playerName()} is set to Big Kid mode.`);
+  });
+  bind("#stage-explorer", "click", () => {
+    Store.setStage("explorer");
+    renderSettingsTab();
+    refreshHome();
+    toast(`${playerName()} is set to Little Learner mode.`);
+  });
+  bind("#set-letter-level", "change", (e) => Store.setLetterLevel(e.target.value));
 
   bind("#set-grade", "change", (e) => Store.setSetting("grade", e.target.value));
   bind("#set-sport", "change", (e) => Store.setSetting("sport", e.target.value));

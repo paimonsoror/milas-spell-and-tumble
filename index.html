@@ -39,13 +39,17 @@
     <div id="home-goal" style="margin-bottom:14px"></div>
 
     <div class="home-grid">
-      <button class="home-tile" data-go="setup" data-mode="practice">
+      <button class="home-tile stage-speller" data-go="setup" data-mode="practice">
         <span class="emoji">🏟️</span>
         <span><b>Practice Gym</b><span>Spell as long as you like. Build your streak, no pressure.</span></span>
       </button>
-      <button class="home-tile" data-go="setup" data-mode="competition">
+      <button class="home-tile stage-speller" data-go="setup" data-mode="competition">
         <span class="emoji">🏅</span>
         <span><b>Competition</b><span>A full routine judged by three judges. Go for gold!</span></span>
+      </button>
+      <button class="home-tile stage-explorer" data-go="letters">
+        <span class="emoji">🔤</span>
+        <span><b>Letter Play</b><span>Find the letter, then watch her fly!</span></span>
       </button>
       <button class="home-tile" data-go="studio">
         <span class="emoji">✨</span>
@@ -291,6 +295,39 @@
   </div>
 </section>
 
+<!-- ============================ LETTERS (early-learner track) ============================ -->
+<section class="screen" id="screen-letters">
+  <div class="card">
+    <div class="letters-hud">
+      <button class="btn ghost small" data-go="home">← Home</button>
+      <div class="streak-dots" id="letters-dots" aria-label="This round so far"></div>
+      <div class="spacer"></div>
+      <span class="star-bank">⭐ <span id="letters-stars">0</span></span>
+    </div>
+
+    <div class="letters-layout">
+      <div class="letters-preview">
+        <svg id="letters-floor" viewBox="200 15 330 310" aria-hidden="true">
+          <rect x="0" y="312" width="700" height="70" fill="#c4b5fd"/>
+          <rect x="180" y="306" width="340" height="10" rx="5" fill="#a78bfa"/>
+        </svg>
+        <svg id="letters-gymnast" viewBox="200 15 330 310"></svg>
+      </div>
+
+      <div class="letters-play">
+        <div class="letters-prompt" id="letters-prompt"></div>
+        <div class="row center" style="margin-bottom:10px">
+          <button class="btn small" id="btn-letters-say">🔊 Hear it again</button>
+        </div>
+        <div class="letter-choice-grid" id="letters-choices"></div>
+        <div class="letters-feedback" id="letters-feedback"></div>
+      </div>
+    </div>
+
+    <div class="letters-summary" id="letters-summary" style="display:none"></div>
+  </div>
+</section>
+
 <!-- ============================ PARENTS ============================ -->
 <section class="screen" id="screen-parents">
   <div class="card">
@@ -321,6 +358,7 @@
 </div>
 
 <script src="js/words.js"></script>
+<script src="js/letters.js"></script>
 <script src="js/avatar.js"></script>
 <script src="js/skills.js"></script>
 <script src="js/audio.js"></script>

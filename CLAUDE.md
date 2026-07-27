@@ -20,7 +20,10 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >    freeform note), per-word "needed help" tracking, and a read-only
 >    cross-profile peek. Its §8 tells the curriculum specialist exactly what
 >    hook to extend for real pattern/phonics targeting.
-> 4. Curriculum specialist, who will own `js/words.js` and the word content.
+> 4. `HANDOFF-CURRICULUM.md` — the curriculum specialist who owns `js/words.js`
+>    and the word content. **Ready to start.** Written by the early-learner
+>    specialist below as its own handoff, the same way every prior specialist
+>    in this chain wrote the next one's brief; not started yet itself.
 >
 > Running **in parallel** to the content chain above, since it's an
 > infrastructure question, not a gameplay one:
@@ -32,6 +35,20 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >   opt-in and both fire-and-forget from the client's side, so the offline
 >   zero-server folder copy of this game is unaffected either way. Its §10
 >   is the exact hook for whoever touches this next.
+>
+> Also ran **in parallel**, triggered by a second, younger sibling (age 5)
+> now wanting to play:
+>
+> - `HANDOFF-EARLY-LEARNER.md` — preschool/kindergarten curriculum and
+>   age-tailored experience. **Done.** Added a whole separate "explorer" track
+>   (`js/letters.js`, a Letter Play screen, its own home-screen tiles) for
+>   letter-name and letter-sound recognition, plus the age/stage-awareness the
+>   app never had — a per-profile `stage` field (`"speller"` | `"explorer"`,
+>   grown-up-set, defaulting to `"speller"` so no existing save changed) and an
+>   `earlyLearner` progress bucket in `js/store.js`. Deliberately did not touch
+>   `js/words.js`/`WORD_LISTS`, and Mila's own experience and save are
+>   unregressed. Its §5/§9 record the open seam between this track and item 4
+>   above — read that before assuming `g1` is the automatic next step after it.
 
 ## Running it
 
@@ -46,9 +63,10 @@ Web Speech API and flashes the word on screen instead.
 
 | File | Responsibility |
 |---|---|
-| `index.html` | All seven screens as `<section class="screen">`, plus the arena scenery SVG |
+| `index.html` | All eight screens as `<section class="screen">`, plus the arena scenery SVG |
 | `css/styles.css` | Everything visual. No framework. |
 | `js/words.js` | 252 words across grades 1–5 + a gym/cheer list, each with a sentence |
+| `js/letters.js` | The "explorer" track's content — 26 letters (name + sound clue) — and its pure helpers (`nextLetterLevel`, `chooseOptionCount`, `selectLetterPool`). Separate from `js/words.js` on purpose; see `docs/HANDOFF-EARLY-LEARNER.md`. |
 | `js/avatar.js` | The jointed SVG figure (`Gymnast`), the unlock catalog, pose helpers |
 | `js/skills.js` | Skill keyframe data + the `Animator` that tweens between poses |
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
@@ -56,8 +74,8 @@ Web Speech API and flashes the word on screen instead.
 | `js/app.js` | Screens, game loop, avatar studio, coach's voice, grown-ups dashboard |
 | `server/` | Optional cross-device sync backend (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`). |
 
-Load order matters — `app.js` last, `words.js` first. They share globals rather than
-importing.
+Load order matters — `app.js` last, `words.js` first (`letters.js` right after it).
+They share globals rather than importing.
 
 `server/` is a separate deployable, not part of the client bundle — the game itself
 still has no build step and still runs from a double-clicked `index.html` with zero
@@ -147,6 +165,20 @@ Two profile fields drive the engagement loop and are worth knowing about:
 - **`sync`** — `{ code, lastSyncedAt }`. Cross-device sync opt-in — see
   `docs/HANDOFF-ARCHITECTURE.md`. `code` is `null` until a grown-up turns sync
   on; every sync call is fire-and-forget and silently no-ops without one.
+- **`stage`** — `"speller"` or `"explorer"`. Which of the two tracks this profile
+  plays: the original spelling game, or the pre-literacy letters track for a
+  younger sibling (see `docs/HANDOFF-EARLY-LEARNER.md`). Always defaults to
+  `"speller"` and is only ever changed explicitly — at profile creation via the
+  picker in `renderProfiles()`, or later from the Grown-Ups dashboard's Settings
+  tab (`Store.setStage()`) — never inferred from an age or anything else.
+  `refreshHome()` reads it to decide which home-screen tiles to show.
+- **`earlyLearner`** — `{ level, levelProgress, letters, roundsCompleted }`.
+  Progress for the explorer track only; a `"speller"` profile carries it around
+  unused. `level` is `"upper"` → `"lower"` → `"sound"` (`LETTER_LEVELS` in
+  `js/letters.js`) and advances on its own via `nextLetterLevel()` once a level
+  has enough reps at good accuracy, though a grown-up can override it directly.
+  `letters` is per-letter-id `{ seen, right, wrong }`, the explorer-track
+  equivalent of `stats.words`.
 
 - `migrate()` wraps a bare v1 save (no `profiles` key) into the file's first profile.
 - Every profile is merged onto a fresh `blankProfile()` on load, so saves written by
@@ -180,6 +212,21 @@ visible **+1 bonus** on top. `judgeScores()` follows the same shape — a `soloR
 bonus, never a hint deduction — so a score can't drop below what her accuracy
 earned. Its base constant came down from 3.2 to 2.7 to make room, because bolting
 the bonus on top pushed a 5-of-6 routine into gold.
+
+**The explorer track asks about a whole word's sound, never a bare phoneme.**
+There is no reliable cross-browser way to make the Web Speech API say an isolated
+sound like "mmm" — asking it to speak a single letter reliably produces the
+letter's *name* instead ("em"), which is exactly what the letter-name levels
+want, but is the wrong tool for testing sounds. Rather than fight that, the
+`"sound"` level in `js/letters.js` asks "which letter makes the first sound in
+the word ___" using an ordinary, fully-formed sentence read by TTS as normal —
+sidestepping the constraint instead of working around it with scripted phonetic
+spellings. Reward cadence is deliberately not "every correct answer": the avatar
+performs a skill every 4th correct pick in a round, not every one, because a
+5-year-old's payoff needs to stay legible rather than constant-and-cheap. A wrong
+tap just disables that one choice and lets her keep trying the rest in place —
+no three-strikes climb like the speller track, since that reads as too many
+steps at this age.
 
 **The dot row records progress, not failure.** It sits on screen the whole
 session, so a miss is a hollow "still learning" ring, never a red mark — and it

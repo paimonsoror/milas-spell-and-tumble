@@ -149,6 +149,12 @@ p { margin: 0 0 .8em; line-height: 1.5; }
 
 .home-tile.wide { grid-column: 1 / -1; }
 
+/* which tiles show depends on the active profile's stage (speller/explorer,
+   see HANDOFF-EARLY-LEARNER.md) — refreshHome() toggles the class on
+   .home-grid, never removes the markup, so nothing here needs re-rendering */
+.home-grid.explorer .stage-speller { display: none; }
+.home-grid:not(.explorer) .stage-explorer { display: none; }
+
 /* ---------- coach's voice ---------- */
 
 .voice-grid {
@@ -605,6 +611,65 @@ input[type="text"].spell-input.shake { animation: shake .4s ease; }
   border-radius: 999px; padding: 8px 18px;
   font-weight: bold; font-size: 19px;
 }
+
+/* ---------- letter play (early-learner track) ---------- */
+
+.letters-hud { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+
+.letters-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+@media (max-width: 700px) { .letters-layout { grid-template-columns: 1fr; } }
+
+.letters-preview {
+  position: relative;
+  background: linear-gradient(180deg, #ede9fe, #fce7f3);
+  border: 3px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  aspect-ratio: 330 / 310;
+}
+.letters-preview svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.letters-prompt {
+  font-size: clamp(20px, 3.6vw, 30px);
+  font-weight: bold;
+  color: var(--purple-deep);
+  text-align: center;
+  margin-bottom: 14px;
+}
+
+.letter-choice-grid {
+  display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+  margin-bottom: 14px;
+}
+.letter-choice {
+  width: 110px; height: 110px;
+  font-family: var(--font-letters);
+  font-size: 56px; font-weight: bold;
+  color: var(--ink);
+  background: var(--panel);
+  border: 4px solid var(--line);
+  border-radius: 22px;
+  cursor: pointer;
+  transition: transform .1s ease, border-color .1s ease, background .1s ease;
+}
+.letter-choice:hover { transform: translateY(-3px); }
+.letter-choice:focus-visible { outline: 4px solid var(--gold-light); outline-offset: 3px; }
+.letter-choice.lc-right { border-color: var(--green); background: #dcfce7; color: #15803d; }
+/* soft "try again", not an alarming red X — never punitive, doubly so at 5 */
+.letter-choice.lc-wrong { border-color: var(--gold-light); background: #fff7ed; opacity: .55; }
+.letter-choice.lc-wrong:disabled { cursor: default; }
+.letter-choice.shake { animation: shake .4s ease; }
+
+.letters-feedback {
+  min-height: 1.4em;
+  text-align: center;
+  font-size: 18px;
+  font-weight: bold;
+  color: var(--purple-deep);
+}
+
+.letters-summary { margin-top: 16px; text-align: center; }
+.letters-summary .medal-big { font-size: 64px; line-height: 1; }
 
 /* ---------- parent dashboard ---------- */
 

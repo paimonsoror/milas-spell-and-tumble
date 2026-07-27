@@ -79,7 +79,28 @@ function blankProfile(name) {
     // cross-device sync opt-in — see HANDOFF-ARCHITECTURE.md. Unset (code:
     // null) means this profile has never opted in and stays purely local,
     // exactly as every profile always has.
-    sync: { code: null, lastSyncedAt: null }
+    sync: { code: null, lastSyncedAt: null },
+    // "speller" is the original game this whole file used to be exclusively
+    // about; "explorer" is the pre-literacy letters track for a younger
+    // sibling (see HANDOFF-EARLY-LEARNER.md). This is a grown-up's explicit,
+    // per-profile choice — never inferred from an age field, because a
+    // struggling older reader or a precocious younger one can need the other
+    // track. Defaulting to "speller" means every save written before this
+    // feature existed keeps opening into exactly the experience it always
+    // has; nothing about an existing profile changes on its own.
+    stage: "speller",
+    // progress data for the explorer track only; a "speller" profile just
+    // carries this around unused, same as it would carry any other default.
+    earlyLearner: {
+      level: "upper", // "upper" -> "lower" -> "sound", see nextLetterLevel()
+      levelProgress: {
+        upper: { attempts: 0, right: 0 },
+        lower: { attempts: 0, right: 0 },
+        sound: { attempts: 0, right: 0 }
+      },
+      letters: {}, // per letter id: { seen, right, wrong }
+      roundsCompleted: 0
+    }
   };
 }
 
@@ -165,8 +186,9 @@ const Store = {
     return this.data;
   },
 
-  createProfile(name) {
+  createProfile(name, stage) {
     const p = blankProfile(name);
+    if (stage === "explorer") p.stage = "explorer";
     this.file.profiles[p.id] = p;
     this.file.order.push(p.id);
     this.save();
@@ -291,6 +313,52 @@ const Store = {
 
   setSetting(key, value) {
     this.data.settings[key] = value;
+    this.save();
+  },
+
+  /* ---- explorer track (pre-literacy letters, HANDOFF-EARLY-LEARNER.md) ----
+     Kept separate from the stats/prefs above, which are all about a "speller"
+     profile's words. A grown-up sets/overrides stage explicitly from the
+     dashboard; it is never inferred from anything else. */
+
+  setStage(stage) {
+    this.data.stage = stage === "explorer" ? "explorer" : "speller";
+    this.save();
+  },
+
+  setLetterLevel(level) {
+    if (LETTER_LEVELS.indexOf(level) === -1) return;
+    this.data.earlyLearner.level = level;
+    this.save();
+  },
+
+  /* Picks a round's worth of letter ids, weighted toward the current level's
+     weaker/unseen letters. Pure over its arguments — see selectLetterPool()
+     in letters.js — this is just the this.data-reading wrapper around it,
+     same split as buildQueue()/selectReviewPool() for the spelling side. */
+  selectLetterPoolForRound(count) {
+    const el = this.data.earlyLearner;
+    return selectLetterPool(LETTERS, el.letters, count);
+  },
+
+  /* wasRight is "did she land on it eventually" — see recordLetterOutcome()
+     for whether it took more than one try. level is the level it was asked
+     at (upper/lower/sound), which is what levelProgress advances on. */
+  recordLetterAttempt(letterId, level, wasRight) {
+    const el = this.data.earlyLearner;
+    const l = (el.letters[letterId] = el.letters[letterId] || { seen: 0, right: 0, wrong: 0 });
+    l.seen++;
+    if (wasRight) l.right++;
+    else l.wrong++;
+    const lp = (el.levelProgress[level] = el.levelProgress[level] || { attempts: 0, right: 0 });
+    lp.attempts++;
+    if (wasRight) lp.right++;
+    el.level = nextLetterLevel(el);
+    this.save();
+  },
+
+  finishLetterRound() {
+    this.data.earlyLearner.roundsCompleted++;
     this.save();
   },
 
