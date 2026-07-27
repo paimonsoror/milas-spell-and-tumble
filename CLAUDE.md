@@ -56,6 +56,23 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >   `js/words.js`/`WORD_LISTS`, and Mila's own experience and save are
 >   unregressed. Its §5/§9 record the open seam between this track and item 4
 >   above — read that before assuming `g1` is the automatic next step after it.
+> - `HANDOFF-SPEECH-AND-LANGUAGE.md` — a second branch off the early-learner
+>   track, for the same 5-year-old: pronoun-case practice ("she" vs. "her",
+>   widened to also cover "he"/"him" and "they"/"them" per the project
+>   owner) and a "th"-vs-"f" listening-discrimination activity that echoes
+>   her actual speech therapist's tactile cue. **Done.** Added `js/language.js`
+>   (its own content shape, deliberately not `WORD_LISTS` or `LETTERS`) and one
+>   new "Language Play" screen covering both activities — picking a home tile
+>   picks the activity, so the two share a screen without a mid-session mode
+>   switch. Both are receptive tap-to-choose tasks, always exactly two
+>   choices (a real binary, not `chooseOptionCount()`'s 2-4), no explicit
+>   levels (neither task has a real difficulty ladder the way letter
+>   name-then-sound does — weighted item selection alone carries difficulty),
+>   and the same every-4th-correct reward cadence as Letter Play. No
+>   microphone anywhere in this app, so the "th"/"f" activity — and the
+>   Grown-Ups dashboard note about it — are explicit that it tests whether
+>   she can *hear* the difference, never a grader of her actual speech.
+>   Nobody is downstream of this yet.
 
 ## Running it
 
@@ -66,14 +83,23 @@ refuse to load over `file://`). Progress lives in `localStorage`.
 Chrome, Edge, or Safari are needed for read-aloud; the game detects a missing
 Web Speech API and flashes the word on screen instead.
 
+**Version.** `APP_VERSION` (`js/app.js`, top of file) is a hand-bumped string —
+there's no build step and no git-derived build number to pull one from, so
+it's the one manual signal for "which copy of the app is this," shown in a
+quiet corner badge on every screen and again in the Grown-Ups dashboard's
+Settings tab. Bump it whenever you ship a change worth being able to tell
+apart from the last one; it's unrelated to `SAVE_VERSION` in `js/store.js`,
+which versions the save-file *shape*, not the code.
+
 ## Layout
 
 | File | Responsibility |
 |---|---|
-| `index.html` | All eight screens as `<section class="screen">`, plus the arena scenery SVG |
+| `index.html` | All nine screens as `<section class="screen">`, plus the arena scenery SVG |
 | `css/styles.css` | Everything visual. No framework. |
 | `js/words.js` | 261 words across grades 1–5 + a gym/cheer list, each with a sentence — a designed curriculum organized into phonics/morphology clusters, see `docs/HANDOFF-CURRICULUM.md` |
 | `js/letters.js` | The "explorer" track's content — 26 letters (name + sound clue) — and its pure helpers (`nextLetterLevel`, `chooseOptionCount`, `selectLetterPool`). Separate from `js/words.js` on purpose; see `docs/HANDOFF-EARLY-LEARNER.md`. |
+| `js/language.js` | The explorer track's second activity set — pronoun-case sentences (she/her, he/him, they/them) and "th"/"f" minimal-pair words, plus their pure selection helpers and the inline-SVG mouth-shape icon. Separate from `js/letters.js`/`WORD_LISTS` on purpose; see `docs/HANDOFF-SPEECH-AND-LANGUAGE.md`. |
 | `js/avatar.js` | The jointed SVG figure (`Gymnast`), the unlock catalog, pose helpers |
 | `js/skills.js` | Skill keyframe data + the `Animator` that tweens between poses |
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
@@ -81,8 +107,8 @@ Web Speech API and flashes the word on screen instead.
 | `js/app.js` | Screens, game loop, avatar studio, coach's voice, grown-ups dashboard |
 | `server/` | Optional cross-device sync backend (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`). |
 
-Load order matters — `app.js` last, `words.js` first (`letters.js` right after it).
-They share globals rather than importing.
+Load order matters — `app.js` last, `words.js` first (`letters.js` and `language.js`
+right after it). They share globals rather than importing.
 
 `server/` is a separate deployable, not part of the client bundle — the game itself
 still has no build step and still runs from a double-clicked `index.html` with zero
@@ -193,6 +219,12 @@ Two profile fields drive the engagement loop and are worth knowing about:
   has enough reps at good accuracy, though a grown-up can override it directly.
   `letters` is per-letter-id `{ seen, right, wrong }`, the explorer-track
   equivalent of `stats.words`.
+- **`languagePlay`** — `{ pronoun: { items, roundsCompleted }, sound: { pairs,
+  roundsCompleted } }` (see `docs/HANDOFF-SPEECH-AND-LANGUAGE.md`). A second,
+  separate explorer-track bucket alongside `earlyLearner`, not folded into it —
+  `items`/`pairs` are per-content-id `{ seen, right, wrong }`, one map for the
+  pronoun-case sentences and one for the th/f word pairs, tracked independently
+  since they're unrelated skills with unrelated content ids.
 
 - `migrate()` wraps a bare v1 save (no `profiles` key) into the file's first profile.
 - Every profile is merged onto a fresh `blankProfile()` on load, so saves written by
@@ -241,6 +273,27 @@ performs a skill every 4th correct pick in a round, not every one, because a
 tap just disables that one choice and lets her keep trying the rest in place —
 no three-strikes climb like the speller track, since that reads as too many
 steps at this age.
+
+**Language Play is one screen for two activities, not two screens.** Picking
+"Which Word?" or "Th or F?" from the home grid already picks the activity, so
+`renderLanguageChoices()`/`speakLanguagePrompt()`/`pickLanguageChoice()` branch
+internally on `languageSession.kind` instead of asking her to choose a mode
+mid-screen — the two activities differ in content (sentences vs. word pairs),
+not in the underlying tap-two-choices mechanic, so splitting the screen would
+have duplicated markup and wiring for no gain. Both are pinned to exactly two
+choices, never `chooseOptionCount()`'s 2–4, because pronoun case and th/f are
+each a genuine binary — a third option would be an invented distraction, not a
+fair harder step. Neither activity has explicit levels the way letters has
+upper→lower→sound: there's no real difficulty ladder for either skill, so
+weighted item selection (`js/language.js`'s `selectPronounPool`/
+`selectSoundPool`, same "circle back to the shaky ones" shape as
+`selectLetterPool`) carries all of the adaptation on its own. The "Th or F?"
+activity's mouth-shape SVG (tongue-between-teeth vs. lip-under-teeth) is a
+deliberate visual echo of her actual speech therapist's tactile cue, not an
+invented one — and because there is no microphone anywhere in this app (see
+§7.2 of `docs/HANDOFF-SPEECH-AND-LANGUAGE.md`), it can only ever test whether
+she can *hear* the difference, never grade her own speech; the Grown-Ups
+dashboard says so explicitly rather than letting a parent overtrust it.
 
 **The dot row records progress, not failure.** It sits on screen the whole
 session, so a miss is a hollow "still learning" ring, never a red mark — and it

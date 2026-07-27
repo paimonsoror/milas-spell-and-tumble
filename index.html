@@ -51,6 +51,14 @@
         <span class="emoji">🔤</span>
         <span><b>Letter Play</b><span>Find the letter, then watch her fly!</span></span>
       </button>
+      <button class="home-tile stage-explorer" data-go="language-pronoun">
+        <span class="emoji">🗣️</span>
+        <span><b>Which Word?</b><span>Listen to the sentence and tap the right word.</span></span>
+      </button>
+      <button class="home-tile stage-explorer" data-go="language-sound">
+        <span class="emoji">👄</span>
+        <span><b>Th or F?</b><span>Listen close — which word do you hear?</span></span>
+      </button>
       <button class="home-tile" data-go="studio">
         <span class="emoji">✨</span>
         <span><b>Avatar Studio</b><span>Spend your stars on hair, uniforms, bows and magic trails.</span></span>
@@ -328,6 +336,40 @@
   </div>
 </section>
 
+<!-- ============================ LANGUAGE PLAY (HANDOFF-SPEECH-AND-LANGUAGE.md) ============================ -->
+<section class="screen" id="screen-language">
+  <div class="card">
+    <div class="letters-hud">
+      <button class="btn ghost small" data-go="home">← Home</button>
+      <b id="language-title"></b>
+      <div class="streak-dots" id="language-dots" aria-label="This round so far"></div>
+      <div class="spacer"></div>
+      <span class="star-bank">⭐ <span id="language-stars">0</span></span>
+    </div>
+
+    <div class="letters-layout">
+      <div class="letters-preview language-preview">
+        <svg id="language-floor" viewBox="200 15 330 310" aria-hidden="true">
+          <rect x="0" y="312" width="700" height="70" fill="#c4b5fd"/>
+          <rect x="180" y="306" width="340" height="10" rx="5" fill="#a78bfa"/>
+        </svg>
+        <svg id="language-gymnast" viewBox="200 15 330 310"></svg>
+      </div>
+
+      <div class="letters-play">
+        <div class="letters-prompt" id="language-prompt"></div>
+        <div class="row center" style="margin-bottom:10px">
+          <button class="btn small" id="btn-language-say">🔊 Hear it again</button>
+        </div>
+        <div class="language-choice-grid" id="language-choices"></div>
+        <div class="letters-feedback" id="language-feedback"></div>
+      </div>
+    </div>
+
+    <div class="letters-summary" id="language-summary" style="display:none"></div>
+  </div>
+</section>
+
 <!-- ============================ PARENTS ============================ -->
 <section class="screen" id="screen-parents">
   <div class="card">
@@ -355,10 +397,13 @@
   </div>
 </section>
 
+<div class="app-version" id="app-version" aria-hidden="true"></div>
+
 </div>
 
 <script src="js/words.js"></script>
 <script src="js/letters.js"></script>
+<script src="js/language.js"></script>
 <script src="js/avatar.js"></script>
 <script src="js/skills.js"></script>
 <script src="js/audio.js"></script>

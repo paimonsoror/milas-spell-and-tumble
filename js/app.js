@@ -1,5 +1,15 @@
 /* Screens, game loop, avatar studio, and the grown-ups dashboard. */
 
+/* Bump this by hand whenever a meaningfully-shipped change goes out. There's
+   no build step and no git-derived build number here on purpose (same
+   philosophy as everywhere else in this repo), so this is the one manual
+   signal for "which copy of the app is this" when opening the page on a
+   given device — shown in the corner badge (index.html #app-version) and in
+   the Grown-Ups dashboard's Settings tab. Not the same thing as
+   SAVE_VERSION in store.js, which versions the save-file *shape*, not the
+   code. */
+const APP_VERSION = "1.0.0";
+
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
@@ -9,8 +19,10 @@ const sfx = new Sfx();
 let arena = null;   // { gymnast, animator }
 let studio = null;  // { gymnast, animator }
 let lettersArena = null; // { gymnast, animator } — the early-learner track's own stage, see startLetterRound()
+let languageArena = null; // { gymnast, animator } — "Language Play", see startLanguageRound() (HANDOFF-SPEECH-AND-LANGUAGE.md)
 let session = null;
 let letterSession = null;
+let languageSession = null;
 let newProfileStage = "speller"; // set by the picker in renderProfiles(), read when a profile is created
 let parentsUnlocked = false;
 // true only in the ?code=XXXXXX remote-view boot path (see initRemoteView) —
@@ -23,6 +35,8 @@ let remoteReadOnly = false;
    ============================================================ */
 
 function init() {
+  $("#app-version").textContent = "v" + APP_VERSION;
+
   const remoteCode = new URLSearchParams(location.search).get("code");
   if (remoteCode) return initRemoteView(remoteCode);
 
@@ -53,11 +67,19 @@ function init() {
   lettersArena.gymnast.setLook(Store.data.look);
   lettersArena.animator.idle();
 
+  // same "stationary, like the studio figure" trick as lettersArena above —
+  // Language Play never needs travel either
+  const gG = new Gymnast($("#language-gymnast"), { x: 350, y: 250, zoom: 1.25 });
+  languageArena = { gymnast: gG, animator: new Animator(gG, { min: 340, max: 360 }) };
+  languageArena.gymnast.setLook(Store.data.look);
+  languageArena.animator.idle();
+
   wireNav();
   wireSetup();
   wireGame();
   wireStudio();
   wireLetters();
+  wireLanguage();
   wireVoice();
   wireProfiles();
   wireParents();
@@ -119,6 +141,7 @@ function applyProfileSettings() {
   if (arena) arena.gymnast.setLook(Store.data.look);
   if (studio) studio.gymnast.setLook(Store.data.look);
   if (lettersArena) lettersArena.gymnast.setLook(Store.data.look);
+  if (languageArena) languageArena.gymnast.setLook(Store.data.look);
   document.title = `${Store.data.name}'s Spell & Tumble Championship`;
   // every player keeps their own day streak, so this follows the switch —
   // but skipped for a still-unclaimed firstRun placeholder: registerVisit()
@@ -176,6 +199,7 @@ function showScreen(name) {
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (name !== "studio") clearPreview(); // never carry a try-on out of the studio
   if (name !== "letters" && letterSession) { speaker.cancel(); letterSession = null; }
+  if (name !== "language" && languageSession) { speaker.cancel(); languageSession = null; }
   if (name === "studio") refreshStudio();
   if (name === "home") refreshHome();
   if (name === "voice") renderVoice();
@@ -189,6 +213,8 @@ function wireNav() {
     const dest = el.dataset.go;
     if (dest === "setup") openSetup(el.dataset.mode || Store.data.settings.mode);
     else if (dest === "letters") startLetterRound();
+    else if (dest === "language-pronoun") startLanguageRound("pronoun");
+    else if (dest === "language-sound") startLanguageRound("sound");
     else showScreen(dest);
   });
 
@@ -1562,6 +1588,265 @@ function wireLetters() {
 }
 
 /* ============================================================
+   language play (pronoun case + th/f discrimination —
+   HANDOFF-SPEECH-AND-LANGUAGE.md)
+
+   A second branch off the explorer track, sharing one screen for both
+   activities rather than two: picking a home tile already picks the
+   activity, so there's no extra "which kind of question" step for her to
+   navigate mid-screen, while the render/speak/pick/advance functions below
+   branch on `languageSession.kind` instead of duplicating the whole flow —
+   the two activities differ in content, not in the tap-to-choose mechanics
+   underneath, which is exactly what startLetterRound()'s header comment
+   already reasoned through for why this shouldn't bend the *spelling*
+   track's session/phase machinery, one level up from here.
+
+   Always exactly two choices, not chooseOptionCount()'s 2-4: unlike a
+   26-letter alphabet, both of these tasks are a real binary (the right
+   case or the wrong one; the th word or the f word), so a third option
+   would just be a made-up distraction, not a fair harder step.
+   ============================================================ */
+
+const LANGUAGE_ROUND_LEN = 8;
+const LANGUAGE_KIND_LABEL = { pronoun: "Which Word?", sound: "Th or F?" };
+
+function buildLanguageQueue(kind) {
+  if (kind === "pronoun") return Store.selectPronounPoolForRound(LANGUAGE_ROUND_LEN);
+  // direction (which side of the pair is spoken) is resolved once per
+  // appearance here, not baked into the content — see resolveSoundItem()
+  return Store.selectSoundPoolForRound(LANGUAGE_ROUND_LEN).map((id) => resolveSoundItem(SOUND_PAIR_BY_ID[id]));
+}
+
+function currentLanguageItem() {
+  const s = languageSession;
+  return s.kind === "pronoun" ? PRONOUN_BY_ID[s.queue[s.index]] : s.queue[s.index];
+}
+
+function recordLanguageAttempt(item, wasRight) {
+  if (languageSession.kind === "pronoun") Store.recordPronounAttempt(item.id, wasRight);
+  else Store.recordSoundAttempt(item.pairId, wasRight);
+}
+
+function startLanguageRound(kind) {
+  languageSession = {
+    kind,
+    queue: buildLanguageQueue(kind),
+    index: 0,
+    correct: 0,
+    wrong: 0,
+    streak: 0,
+    missStreak: 0,
+    bestStreak: 0,
+    stars: 0,
+    lastSkillId: null,
+    results: [],
+    firstTry: true
+  };
+  $("#language-summary").style.display = "none";
+  $("#language-dots").innerHTML = "";
+  $("#language-title").textContent = LANGUAGE_KIND_LABEL[kind];
+  languageArena.gymnast.setLook(Store.data.look);
+  showScreen("language");
+  sfx.whistle();
+  setTimeout(nextLanguageItem, 500);
+}
+
+function nextLanguageItem() {
+  if (!languageSession) return;
+  if (languageSession.index >= languageSession.queue.length) {
+    finishLanguageRound();
+    return;
+  }
+  languageSession.firstTry = true;
+  $("#language-stars").textContent = Store.data.stars;
+  renderLanguageChoices();
+  speakLanguagePrompt();
+}
+
+function capitalizeWord(w) {
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+function renderLanguageChoices() {
+  const s = languageSession;
+  const item = currentLanguageItem();
+  $("#language-feedback").textContent = "";
+
+  if (s.kind === "pronoun") {
+    const options = shuffleLanguageItems([
+      { value: item.correct, label: capitalizeWord(item.correct) },
+      { value: item.wrong, label: capitalizeWord(item.wrong) }
+    ]);
+    $("#language-choices").innerHTML = options
+      .map((o) => `<button class="language-choice" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</button>`)
+      .join("");
+  } else {
+    const options = shuffleLanguageItems([
+      { value: item.target, sound: item.targetSound },
+      { value: item.distractor, sound: item.targetSound === "th" ? "f" : "th" }
+    ]);
+    $("#language-choices").innerHTML = options
+      .map(
+        (o) =>
+          `<button class="language-choice sound" data-value="${escapeHtml(o.value)}">${mouthShapeIcon(o.sound)}<span>${escapeHtml(o.value)}</span></button>`
+      )
+      .join("");
+  }
+}
+
+/* Fallback when speech is missing or muted mirrors speakLetterPrompt()'s own
+   reasoning: an on-screen flashcard of the target is a legitimate visual
+   version of the same task, not a lesser one. The pronoun sentence has no
+   isolated-phoneme problem (see js/language.js's header), so it's spoken in
+   full with an ordinary placeholder word for the blank. */
+function speakLanguagePrompt() {
+  const s = languageSession;
+  const item = currentLanguageItem();
+
+  if (s.kind === "pronoun") {
+    if (!speaker.supported || !speaker.enabled) {
+      $("#language-prompt").innerHTML = `${item.icon} ${escapeHtml(item.text)}`;
+      return;
+    }
+    $("#language-prompt").textContent = item.text;
+    speaker.cancel();
+    speaker.say(spokenPronounPrompt(item));
+    return;
+  }
+
+  if (!speaker.supported || !speaker.enabled) {
+    $("#language-prompt").textContent = `Find this word: ${item.target}`;
+    return;
+  }
+  $("#language-prompt").textContent = "Listen, then tap the matching word!";
+  speaker.cancel();
+  speaker.say(item.target);
+}
+
+function updateLanguageDots() {
+  $("#language-dots").innerHTML = languageSession.results
+    .map((r) => `<i class="${r.firstTry ? "on" : "fixed"}"></i>`)
+    .join("");
+}
+
+function pickLanguageChoice(value, btnEl) {
+  if (!languageSession) return;
+  const s = languageSession;
+  const item = currentLanguageItem();
+  const correctValue = s.kind === "pronoun" ? item.correct : item.target;
+  const right = value === correctValue;
+  const wasFirstTry = s.firstTry;
+
+  if (!right) {
+    if (wasFirstTry) {
+      recordLanguageAttempt(item, false);
+      s.wrong++;
+      s.streak = 0;
+      s.missStreak++;
+      s.firstTry = false;
+    }
+    sfx.wrong();
+    btnEl.classList.add("lc-wrong", "shake");
+    // same "only the tapped one drops out" softness as pickLetter() — with
+    // only two choices this means the other one is now the only option
+    // left, which is fine: it keeps her in the try, not stuck
+    btnEl.disabled = true;
+    $("#language-feedback").textContent = "Try the other one!";
+    return;
+  }
+
+  $$(".language-choice", $("#language-choices")).forEach((b) => (b.disabled = true));
+
+  if (wasFirstTry) {
+    recordLanguageAttempt(item, true);
+    s.correct++;
+    s.streak++;
+    s.missStreak = 0;
+    s.bestStreak = Math.max(s.bestStreak, s.streak);
+  }
+  s.results.push({ id: s.kind === "pronoun" ? item.id : item.pairId, firstTry: wasFirstTry });
+  updateLanguageDots();
+
+  btnEl.classList.add("lc-right");
+  sfx.star();
+  s.stars += 1;
+  Store.addStars(1);
+  $("#language-stars").textContent = Store.data.stars;
+  $("#language-feedback").textContent = wasFirstTry ? letterCheer() : "Now you've got it! 🌟";
+
+  // same reward cadence as Letter Play — every 4th correct pick in a row, not
+  // every one — kept identical rather than invented fresh, since this is the
+  // same age/attention band and that cadence was already deliberately tuned
+  // for it (HANDOFF-EARLY-LEARNER.md §5)
+  const milestone = wasFirstTry && s.streak > 0 && s.streak % 4 === 0;
+  if (milestone) {
+    const pool = skillsForSport(Store.data.settings.sport).filter((sk) => !sk.travel && sk.id !== "basketToss");
+    const fresh = pool.filter((sk) => sk.id !== s.lastSkillId);
+    const from = fresh.length ? fresh : pool;
+    const skill = from[Math.floor(Math.random() * from.length)];
+    s.lastSkillId = skill.id;
+    sfx.whoosh();
+    languageArena.animator.play(skill).then(() => {
+      burstConfetti(18, $(".language-preview"));
+      setTimeout(advanceLanguageItem, 500);
+    });
+  } else {
+    setTimeout(advanceLanguageItem, wasFirstTry ? 650 : 950);
+  }
+}
+
+function advanceLanguageItem() {
+  if (!languageSession) return;
+  languageSession.index++;
+  nextLanguageItem();
+}
+
+function finishLanguageRound() {
+  if (!languageSession) return;
+  speaker.cancel();
+  const s = languageSession;
+  Store.finishLanguageRound(s.kind);
+  const daily = Store.claimDailyBonus();
+  if (daily) s.stars += daily;
+
+  const total = s.results.length;
+  const acc = total ? s.correct / total : 0;
+  const icon = acc >= 0.9 ? "🌟" : acc >= 0.6 ? "💪" : "🌱";
+  const title = acc >= 0.9 ? "Amazing listening" : acc >= 0.6 ? "Great practice" : "Nice try";
+
+  $("#language-prompt").textContent = "";
+  $("#language-choices").innerHTML = "";
+  $("#language-feedback").textContent = "";
+  $("#language-stars").textContent = Store.data.stars;
+  $("#language-summary").style.display = "";
+  $("#language-summary").innerHTML = `
+    <div class="medal-big">${icon}</div>
+    <h2>${escapeHtml(title)}, ${escapeHtml(playerName())}!</h2>
+    <p class="muted">${s.correct} of ${total} found · best streak ${s.bestStreak}</p>
+    <div class="row center"><span class="star-bank">⭐ +${s.stars} stars earned</span></div>
+    ${daily ? `<div class="welcome streaky" style="margin-top:10px">🔥 Daily bonus +${daily} ⭐ included!</div>` : ""}
+    <div class="row center" style="margin-top:16px">
+      <button class="btn big" id="btn-language-again">Again! 🔁</button>
+      <button class="btn ghost" data-go="home">Home</button>
+    </div>`;
+  $("#btn-language-again").addEventListener("click", () => startLanguageRound(s.kind));
+
+  languageSession = null;
+  refreshHome();
+}
+
+function wireLanguage() {
+  $("#language-choices").addEventListener("click", (e) => {
+    const b = e.target.closest(".language-choice");
+    if (!b || b.disabled || !languageSession) return;
+    pickLanguageChoice(b.dataset.value, b);
+  });
+  $("#btn-language-say").addEventListener("click", () => {
+    if (languageSession) speakLanguagePrompt();
+  });
+}
+
+/* ============================================================
    avatar studio
    ============================================================ */
 
@@ -2010,6 +2295,10 @@ function renderLettersProgressTab() {
     </tr>`;
   }).join("");
 
+  const lang = Store.data.languagePlay;
+  const pronounAcc = accuracyAcross(lang.pronoun.items);
+  const soundAcc = accuracyAcross(lang.sound.pairs);
+
   $("#tab-progress").innerHTML = `
     <div class="stat-grid">
       <div class="stat-box"><div class="k">Current level</div>
@@ -2024,7 +2313,35 @@ function renderLettersProgressTab() {
       ${escapeHtml(playerName())} back to word spelling any time, from the Settings tab.</p>
     <h3 style="margin-top:20px">Letters</h3>
     <table class="data"><thead><tr><th>Letter</th><th>Times seen</th><th></th><th>Accuracy</th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
+      <tbody>${rows}</tbody></table>
+
+    <h3 style="margin-top:24px">Language Play</h3>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="k">Which Word? (pronouns)</div>
+        <div class="v" style="font-size:20px">${pronounAcc == null ? "—" : pct(pronounAcc)}</div>
+        <div class="sub">${lang.pronoun.roundsCompleted} rounds played</div></div>
+      <div class="stat-box"><div class="k">Th or F?</div>
+        <div class="v" style="font-size:20px">${soundAcc == null ? "—" : pct(soundAcc)}</div>
+        <div class="sub">${lang.sound.roundsCompleted} rounds played</div></div>
+    </div>
+    <p class="muted">Both of these are listening/tapping activities — they reinforce telling
+      "she" apart from "her" and the "th" sound apart from "f", the same distinction her
+      speech therapist's tactile cue targets. Neither one listens to or grades her own
+      speech; there's no microphone anywhere in this app, so they can't tell you whether
+      she still says "fermometer" out loud — only whether she can pick the right one when
+      she hears it.</p>`;
+}
+
+/* Rolls up a per-item { seen, right } progress map into one overall
+   accuracy, or null if nothing's been attempted yet — same shape
+   renderLettersProgressTab() already uses per-letter, just totalled. */
+function accuracyAcross(progressMap) {
+  let seen = 0, right = 0;
+  for (const id in progressMap) {
+    seen += progressMap[id].seen;
+    right += progressMap[id].right;
+  }
+  return seen ? right / seen : null;
 }
 
 function renderProgressTab() {
@@ -2506,7 +2823,9 @@ function renderSettingsTab() {
     <div class="row">
       <button class="btn small ghost" id="set-reset-stats">Clear stats only</button>
       <button class="btn small" style="background:var(--red);box-shadow:0 4px 0 #991b1b" id="set-reset-all">Reset everything</button>
-    </div>`;
+    </div>
+
+    <p class="muted" style="font-size:12px;margin-top:24px">App version ${APP_VERSION}</p>`;
 
   const bind = (id, ev, fn) => {
     const el = $(id);

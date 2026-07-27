@@ -103,6 +103,16 @@ function blankProfile(name) {
       },
       letters: {}, // per letter id: { seen, right, wrong }
       roundsCompleted: 0
+    },
+    // progress for the two "Language Play" activities (HANDOFF-SPEECH-AND-
+    // LANGUAGE.md) — its own bucket, not folded into earlyLearner above,
+    // since that field is scoped narrowly to the letters track (see its own
+    // comment) and these are a separate pair of activities on pronoun case
+    // and th/f discrimination. A "speller" profile carries this around
+    // unused, same as earlyLearner already does.
+    languagePlay: {
+      pronoun: { items: {}, roundsCompleted: 0 }, // per pronoun-item id: { seen, right, wrong }
+      sound: { pairs: {}, roundsCompleted: 0 } // per sound-pair id: { seen, right, wrong }
     }
   };
 }
@@ -420,6 +430,40 @@ const Store = {
 
   finishLetterRound() {
     this.data.earlyLearner.roundsCompleted++;
+    this.save();
+  },
+
+  /* ---- language play (pronoun case + th/f discrimination,
+     HANDOFF-SPEECH-AND-LANGUAGE.md) ---- */
+
+  selectPronounPoolForRound(count) {
+    return selectPronounPool(this.data.languagePlay.pronoun.items, count);
+  },
+
+  selectSoundPoolForRound(count) {
+    return selectSoundPool(this.data.languagePlay.sound.pairs, count);
+  },
+
+  recordPronounAttempt(itemId, wasRight) {
+    const items = this.data.languagePlay.pronoun.items;
+    const s = (items[itemId] = items[itemId] || { seen: 0, right: 0, wrong: 0 });
+    s.seen++;
+    if (wasRight) s.right++;
+    else s.wrong++;
+    this.save();
+  },
+
+  recordSoundAttempt(pairId, wasRight) {
+    const pairs = this.data.languagePlay.sound.pairs;
+    const s = (pairs[pairId] = pairs[pairId] || { seen: 0, right: 0, wrong: 0 });
+    s.seen++;
+    if (wasRight) s.right++;
+    else s.wrong++;
+    this.save();
+  },
+
+  finishLanguageRound(kind) {
+    this.data.languagePlay[kind].roundsCompleted++;
     this.save();
   },
 

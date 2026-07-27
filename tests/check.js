@@ -23,7 +23,7 @@ const ctx = vm.createContext({
   fetch: () => Promise.reject(new Error("no network in tests"))
 });
 const src =
-  ["words.js", "letters.js", "avatar.js", "skills.js", "store.js"].map((f) => fs.readFileSync(path + f, "utf8")).join("\n") +
+  ["words.js", "letters.js", "language.js", "avatar.js", "skills.js", "store.js"].map((f) => fs.readFileSync(path + f, "utf8")).join("\n") +
   "\n;globalThis.__done = (" + tests.toString() + ")();";
 
 async function tests() {
@@ -31,7 +31,9 @@ const ctx = {
   SKILLS, IDLE, EASINGS, NEUTRAL_POSE, poseFrom, skillsForSport, chooseSkill,
   CATALOG, SKIN_TONES, DEFAULT_LOOK, Store, parseWordList, WORD_LISTS, GRADE_ORDER,
   Animator, SKILL_BY_ID, dayKey, daysBetween,
-  LETTERS, LETTER_BY_ID, LETTER_LEVELS, nextLetterLevel, chooseOptionCount, selectLetterPool
+  LETTERS, LETTER_BY_ID, LETTER_LEVELS, nextLetterLevel, chooseOptionCount, selectLetterPool,
+  PRONOUN_ITEMS, PRONOUN_BY_ID, spokenPronounPrompt, selectPronounPool,
+  SOUND_PAIRS, SOUND_PAIR_BY_ID, resolveSoundItem, selectSoundPool, mouthShapeIcon
 };
 
 let fails = 0;
@@ -337,6 +339,9 @@ ok(ctx.Store.data.sync.lastSyncedAt === null,
 ok(ctx.Store.data.stage === "speller", "an old save defaults to the speller stage — never silently downgraded");
 ok(ctx.Store.data.earlyLearner && ctx.Store.data.earlyLearner.level === "upper", "an old save gains the earlyLearner bucket");
 ok(Object.keys(ctx.Store.data.earlyLearner.letters).length === 0, "an old save's earlyLearner starts with no letter history");
+ok(ctx.Store.data.languagePlay && Object.keys(ctx.Store.data.languagePlay.pronoun.items).length === 0,
+   "an old save gains the languagePlay bucket, starting with no pronoun history");
+ok(Object.keys(ctx.Store.data.languagePlay.sound.pairs).length === 0, "an old save's languagePlay starts with no sound-pair history");
 
 /* ---- cross-device sync: must never throw or block when offline ---- */
 {
@@ -452,6 +457,67 @@ ok(Object.keys(ctx.Store.data.earlyLearner.letters).length === 0, "an old save's
   ok(aCount > bCount, `a shaky letter (${aCount}/300) is weighted above a mastered one (${bCount}/300)`);
 }
 
+/* ---- language play content (HANDOFF-SPEECH-AND-LANGUAGE.md) ---- */
+{
+  const pids = ctx.PRONOUN_ITEMS.map((p) => p.id);
+  ok(new Set(pids).size === ctx.PRONOUN_ITEMS.length, "pronoun item ids are unique");
+  for (const p of ctx.PRONOUN_ITEMS) {
+    ok(p.text.includes("___"), `${p.id} has a blank to fill`);
+    ok(["subject", "object"].includes(p.case), `${p.id} is tagged subject or object case`);
+    ok(["she", "he", "they"].includes(p.set), `${p.id} belongs to a known pronoun set`);
+    ok(p.correct !== p.wrong, `${p.id} correct and wrong pronoun differ`);
+    ok(ctx.spokenPronounPrompt(p) === p.text.replace("___", "blank"), `${p.id} speaks "blank" in place of the missing word`);
+    ok(!ctx.spokenPronounPrompt(p).includes("___"), `${p.id}'s spoken form has no literal underscore left in it`);
+  }
+  const bothCases = new Set(ctx.PRONOUN_ITEMS.map((p) => p.case));
+  ok(bothCases.has("subject") && bothCases.has("object"), "pronoun items cover both subject and object case");
+  const allSets = new Set(ctx.PRONOUN_ITEMS.map((p) => p.set));
+  ok(allSets.has("she") && allSets.has("he") && allSets.has("they"), "pronoun items cover she/he/they, per the project owner's chosen scope");
+
+  const sids = ctx.SOUND_PAIRS.map((p) => p.id);
+  ok(new Set(sids).size === ctx.SOUND_PAIRS.length, "sound pair ids are unique");
+  for (const p of ctx.SOUND_PAIRS) {
+    ok(typeof p.th === "string" && typeof p.f === "string" && p.th !== p.f, `${p.id} has two distinct real words`);
+    ok(["initial", "final"].includes(p.position), `${p.id} is tagged initial or final position`);
+  }
+
+  // resolveSoundItem must pick one real direction, never invent a third word
+  let thTargetCount = 0;
+  for (let i = 0; i < 200; i++) {
+    const pair = ctx.SOUND_PAIRS[0];
+    const item = ctx.resolveSoundItem(pair);
+    ok(
+      (item.target === pair.th && item.distractor === pair.f && item.targetSound === "th") ||
+      (item.target === pair.f && item.distractor === pair.th && item.targetSound === "f"),
+      "resolveSoundItem pairs target/distractor/targetSound consistently"
+    );
+    if (item.targetSound === "th") thTargetCount++;
+  }
+  ok(thTargetCount > 40 && thTargetCount < 160, `resolveSoundItem picks a direction roughly 50/50 (th was target ${thTargetCount}/200)`);
+
+  ok(ctx.mouthShapeIcon("th").includes("<svg"), "mouthShapeIcon renders an svg for th");
+  ok(ctx.mouthShapeIcon("f").includes("<svg"), "mouthShapeIcon renders an svg for f");
+  ok(ctx.mouthShapeIcon("th") !== ctx.mouthShapeIcon("f"), "th and f get visually distinct mouth-shape icons");
+
+  /* ---- selection helpers ---- */
+  const pPool = ctx.selectPronounPool({}, 8);
+  ok(pPool.length === 8 && new Set(pPool).size === 8, "selectPronounPool draws 8 distinct items");
+  ok(pPool.every((id) => ctx.PRONOUN_BY_ID[id]), "every picked pronoun id is real");
+
+  const sPool = ctx.selectSoundPool({}, 6);
+  ok(sPool.length === 6 && new Set(sPool).size === 6, "selectSoundPool draws 6 distinct pairs");
+  ok(sPool.every((id) => ctx.SOUND_PAIR_BY_ID[id]), "every picked sound-pair id is real");
+
+  const skewed = { [ctx.PRONOUN_ITEMS[0].id]: { seen: 20, right: 2, wrong: 18 }, [ctx.PRONOUN_ITEMS[1].id]: { seen: 20, right: 20, wrong: 0 } };
+  let shakyCount = 0, masteredCount = 0;
+  for (let i = 0; i < 300; i++) {
+    const pool = ctx.selectPronounPool(skewed, 4);
+    if (pool.includes(ctx.PRONOUN_ITEMS[0].id)) shakyCount++;
+    if (pool.includes(ctx.PRONOUN_ITEMS[1].id)) masteredCount++;
+  }
+  ok(shakyCount > masteredCount, `a shaky pronoun item (${shakyCount}/300) is weighted above a mastered one (${masteredCount}/300)`);
+}
+
 /* ---- Store: explorer track ---- */
 {
   ctx.Store.resetAll();
@@ -488,6 +554,38 @@ ok(Object.keys(ctx.Store.data.earlyLearner.letters).length === 0, "an old save's
   ok(explorerKid.stage === "explorer", "createProfile can set the stage of a brand-new profile");
   ok(ctx.Store.data.stage === "explorer", "creating a profile doesn't switch to it or touch the active one's stage");
   ctx.Store.deleteProfile(explorerKid.id);
+
+  ctx.Store.setStage("speller"); // leave the fixture profile as the later tests below expect
+}
+
+/* ---- Store: language play (HANDOFF-SPEECH-AND-LANGUAGE.md) ---- */
+{
+  ctx.Store.setStage("explorer");
+
+  const pPool = ctx.Store.selectPronounPoolForRound(8);
+  ok(pPool.length === 8 && new Set(pPool).size === 8, "selectPronounPoolForRound draws 8 distinct items");
+
+  const sPool = ctx.Store.selectSoundPoolForRound(6);
+  ok(sPool.length === 6 && new Set(sPool).size === 6, "selectSoundPoolForRound draws 6 distinct pairs");
+
+  const pid = ctx.PRONOUN_ITEMS[0].id;
+  ctx.Store.recordPronounAttempt(pid, true);
+  ctx.Store.recordPronounAttempt(pid, false);
+  ok(ctx.Store.data.languagePlay.pronoun.items[pid].seen === 2, "per-pronoun-item attempts accumulate");
+  ok(ctx.Store.data.languagePlay.pronoun.items[pid].right === 1 && ctx.Store.data.languagePlay.pronoun.items[pid].wrong === 1,
+     "right/wrong tracked per pronoun item");
+
+  const sid = ctx.SOUND_PAIRS[0].id;
+  ctx.Store.recordSoundAttempt(sid, true);
+  ok(ctx.Store.data.languagePlay.sound.pairs[sid].seen === 1 && ctx.Store.data.languagePlay.sound.pairs[sid].right === 1,
+     "sound-pair attempts are tracked separately from pronoun items");
+
+  const beforePronounRounds = ctx.Store.data.languagePlay.pronoun.roundsCompleted;
+  ctx.Store.finishLanguageRound("pronoun");
+  ok(ctx.Store.data.languagePlay.pronoun.roundsCompleted === beforePronounRounds + 1, "finishing a pronoun round counts it");
+  const beforeSoundRounds = ctx.Store.data.languagePlay.sound.roundsCompleted;
+  ctx.Store.finishLanguageRound("sound");
+  ok(ctx.Store.data.languagePlay.sound.roundsCompleted === beforeSoundRounds + 1, "finishing a sound round counts it independently");
 
   ctx.Store.setStage("speller"); // leave the fixture profile as the later tests below expect
 }
