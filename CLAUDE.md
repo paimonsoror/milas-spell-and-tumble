@@ -54,7 +54,7 @@ Web Speech API and flashes the word on screen instead.
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
 | `js/store.js` | localStorage persistence, profiles, stats, custom word lists |
 | `js/app.js` | Screens, game loop, avatar studio, coach's voice, grown-ups dashboard |
-| `server/` | Optional cross-device sync backend (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md` |
+| `server/` | Optional cross-device sync backend (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`). |
 
 Load order matters — `app.js` last, `words.js` first. They share globals rather than
 importing.
@@ -234,6 +234,22 @@ an operation log. `Store.reconcileSync()` sends the whole profile; whichever sid
 differences are gone. If that assumption ever stops holding — e.g. two kids
 sharing one synced profile from different devices at once — revisit this rather
 than patching around it.
+
+**The `/admin` page is a household-owner tool, not a player-facing surface.**
+It's server-rendered by `server/index.js` (`GET /admin`, plus a small
+`/api/admin/*` API) and shows, across every synced profile: stars, streaks,
+accuracy, per-profile drill-down (the full parsed snapshot as a collapsible
+tree), and a raw dump of the SQLite `profiles` table — deliberately fixed
+views rather than an ad-hoc SQL box, since the schema is one table. It's
+gated by a single shared password: `POST /api/admin/login` checks it against
+`ADMIN_PASSWORD` (a K8s Secret, never committed) and hands back a random
+session token kept in an in-memory `Set` — real logout, at the cost of every
+session ending on a server restart, which is fine since re-entering the
+password is the whole interaction. The page is disabled outright
+(`ADMIN_PASSWORD` unset) unless `server.adminPasswordSecretName` is set in
+the Helm values, so it stays off by default rather than accidentally exposed.
+Deleting a profile from the page reuses the existing public
+`DELETE /api/profiles/:code` route rather than a duplicate admin-only one.
 
 ## Testing
 

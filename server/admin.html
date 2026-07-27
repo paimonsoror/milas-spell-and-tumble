@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mila's Spell &amp; Tumble — Admin</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #f4f5f7; color: #1c1e21;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16181c; color: #e6e8eb; }
+    .card, table { background: #20232a !important; border-color: #333 !important; }
+    input, button { background: #2a2d35 !important; color: #e6e8eb !important; border-color: #444 !important; }
+    .muted { color: #9aa0a8 !important; }
+    .jt-key { color: #7fb8ff !important; }
+    .jt-leaf { color: #cfd3d8 !important; }
+    tr:hover { background: #262a32 !important; }
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .muted { color: #666; font-size: 12px; }
+  .card {
+    background: #fff; border: 1px solid #e1e3e6; border-radius: 8px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  #login-screen { max-width: 320px; margin: 80px auto; }
+  #login-screen input {
+    width: 100%; padding: 8px 10px; margin: 8px 0; border: 1px solid #ccc;
+    border-radius: 6px; font-size: 14px;
+  }
+  button {
+    padding: 7px 14px; border: 1px solid #ccc; border-radius: 6px;
+    background: #fff; cursor: pointer; font-size: 13px;
+  }
+  button:hover { filter: brightness(0.96); }
+  button.danger { border-color: #d9534f; color: #d9534f; }
+  #login-error { color: #d9534f; font-size: 13px; min-height: 1.2em; }
+  .top-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .stat-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .stat { min-width: 100px; }
+  .stat .n { font-size: 20px; font-weight: 600; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tabs button { border-radius: 6px 6px 0 0; }
+  .tabs button.active { background: #eef1f6; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; background: #fff; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+  th { color: #666; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  tr:hover { background: #fafbfc; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tag-err { color: #d9534f; font-size: 12px; }
+  pre.snap {
+    max-height: 4.5em; overflow: hidden; margin: 0; white-space: pre-wrap;
+    word-break: break-all; font-size: 11px; cursor: pointer;
+  }
+  pre.snap.expanded { max-height: none; }
+  #detail { display: none; }
+  #detail .jt-node { margin-left: 14px; }
+  .jt-key { color: #0b5fbf; }
+  .jt-leaf { font-family: ui-monospace, monospace; }
+  .jt-toggle { cursor: pointer; user-select: none; display: inline-block; width: 1em; }
+  #detail-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <h1>Mila's Spell &amp; Tumble</h1>
+  <div class="muted">Admin</div>
+  <form id="login-form">
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password" autofocus>
+    <button type="submit">Sign in</button>
+    <div id="login-error"></div>
+  </form>
+</div>
+
+<div id="dashboard" style="display:none">
+  <div class="top-row">
+    <div>
+      <h1>Mila's Spell &amp; Tumble — Admin</h1>
+      <div class="muted" id="server-line"></div>
+    </div>
+    <button id="logout-btn">Log out</button>
+  </div>
+
+  <div class="tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="raw">Raw rows</button>
+  </div>
+
+  <div class="tab-panel active" id="tab-overview">
+    <div class="card">
+      <table id="overview-table">
+        <thead>
+          <tr>
+            <th>Name</th><th>Code</th><th class="num">Stars</th><th class="num">Streak</th>
+            <th class="num">Accuracy</th><th class="num">Words</th><th>Last synced</th><th class="num">Size</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card" id="detail">
+      <div id="detail-header">
+        <h2 id="detail-title"></h2>
+        <button id="detail-close">Close</button>
+      </div>
+      <div id="detail-tree"></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-raw">
+    <div class="card">
+      <table id="raw-table">
+        <thead><tr><th>Code</th><th>Updated</th><th>Snapshot</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = (sel, el) => (el || document).querySelector(sel);
+  const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
+
+  function fmtTime(ms) {
+    if (!ms) return "never";
+    const d = new Date(ms);
+    return d.toLocaleString();
+  }
+  function fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+  function fmtPct(v) {
+    return v == null ? "—" : Math.round(v * 100) + "%";
+  }
+
+  async function api(path, opts) {
+    const res = await fetch(path, Object.assign({ credentials: "same-origin" }, opts));
+    if (res.status === 401) { showLogin(); throw new Error("unauthorized"); }
+    return res;
+  }
+
+  function showLogin() {
+    $("#dashboard").style.display = "none";
+    $("#login-screen").style.display = "block";
+  }
+  function showDashboard() {
+    $("#login-screen").style.display = "none";
+    $("#dashboard").style.display = "block";
+  }
+
+  $("#login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#login-error").textContent = "";
+    const password = $("#password").value;
+    const res = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+      credentials: "same-origin"
+    });
+    if (!res.ok) {
+      $("#login-error").textContent = "Wrong password.";
+      return;
+    }
+    $("#password").value = "";
+    showDashboard();
+    loadOverview();
+  });
+
+  $("#logout-btn").addEventListener("click", async () => {
+    await fetch("/api/admin/logout", { method: "POST", credentials: "same-origin" });
+    showLogin();
+  });
+
+  $$(".tabs button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".tabs button").forEach((b) => b.classList.remove("active"));
+      $$(".tab-panel").forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      $("#tab-" + btn.dataset.tab).classList.add("active");
+      if (btn.dataset.tab === "raw") loadRaw();
+    });
+  });
+
+  async function loadOverview() {
+    const res = await api("/api/admin/overview");
+    const data = await res.json();
+    const s = data.server;
+    $("#server-line").textContent =
+      `${data.profiles.length} synced profile(s) · ${fmtBytes(s.dbSizeBytes)} db · up ${Math.floor(s.uptimeSeconds / 60)}m · node ${s.nodeVersion}`;
+
+    const tbody = $("#overview-table tbody");
+    tbody.innerHTML = "";
+    data.profiles.forEach((p) => {
+      const tr = document.createElement("tr");
+      if (p.parseError) {
+        tr.innerHTML = `<td colspan="8"><span class="tag-err">unreadable snapshot</span> — ${p.code}</td>`;
+      } else {
+        tr.innerHTML = `
+          <td>${p.name || ""}</td>
+          <td>${p.code}</td>
+          <td class="num">${p.stars}</td>
+          <td class="num">${p.dayStreak}</td>
+          <td class="num">${fmtPct(p.accuracy)}</td>
+          <td class="num">${p.wordsTracked}</td>
+          <td>${fmtTime(p.updatedAt)}</td>
+          <td class="num">${fmtBytes(p.snapshotBytes)}</td>
+          <td></td>
+        `;
+        const actionsCell = tr.lastElementChild;
+        const viewBtn = document.createElement("button");
+        viewBtn.textContent = "View";
+        viewBtn.onclick = () => viewProfile(p.code);
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "Delete";
+        delBtn.className = "danger";
+        delBtn.onclick = () => deleteProfile(p.code);
+        actionsCell.append(viewBtn, " ", delBtn);
+      }
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function loadRaw() {
+    const res = await api("/api/admin/raw");
+    const data = await res.json();
+    const tbody = $("#raw-table tbody");
+    tbody.innerHTML = "";
+    data.rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const pre = document.createElement("pre");
+      pre.className = "snap";
+      pre.textContent = r.snapshot;
+      pre.onclick = () => pre.classList.toggle("expanded");
+      const tdCode = document.createElement("td");
+      tdCode.textContent = r.code;
+      const tdTime = document.createElement("td");
+      tdTime.textContent = fmtTime(r.updatedAt);
+      const tdSnap = document.createElement("td");
+      tdSnap.appendChild(pre);
+      tr.append(tdCode, tdTime, tdSnap);
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function viewProfile(code) {
+    const res = await api("/api/admin/profiles/" + encodeURIComponent(code));
+    const data = await res.json();
+    $("#detail-title").textContent = code;
+    const tree = $("#detail-tree");
+    tree.innerHTML = "";
+    tree.appendChild(data.parseError ? renderLeaf("(unreadable snapshot)") : renderJsonTree(data.profile, null));
+    $("#detail").style.display = "block";
+    $("#detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  $("#detail-close").addEventListener("click", () => { $("#detail").style.display = "none"; });
+
+  async function deleteProfile(code) {
+    if (!confirm(`Delete synced data for ${code}? This can't be undone.`)) return;
+    await fetch("/api/profiles/" + encodeURIComponent(code), { method: "DELETE", credentials: "same-origin" });
+    $("#detail").style.display = "none";
+    loadOverview();
+  }
+
+  function renderLeaf(text) {
+    const el = document.createElement("div");
+    el.className = "jt-leaf";
+    el.textContent = text;
+    return el;
+  }
+
+  function renderJsonTree(value, keyLabel) {
+    const wrap = document.createElement("div");
+    wrap.className = "jt-node";
+    if (value !== null && typeof value === "object") {
+      const isArray = Array.isArray(value);
+      const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+      const header = document.createElement("div");
+      const toggle = document.createElement("span");
+      toggle.className = "jt-toggle";
+      toggle.textContent = "▾";
+      const label = document.createElement("span");
+      label.className = "jt-key";
+      label.textContent = " " + (keyLabel != null ? keyLabel + ": " : "") + (isArray ? `Array(${value.length})` : "Object");
+      header.append(toggle, label);
+      const children = document.createElement("div");
+      entries.forEach(([k, v]) => children.appendChild(renderJsonTree(v, k)));
+      header.onclick = () => {
+        const collapsed = children.style.display === "none";
+        children.style.display = collapsed ? "" : "none";
+        toggle.textContent = collapsed ? "▾" : "▸";
+      };
+      wrap.append(header, children);
+    } else {
+      wrap.appendChild(renderLeaf((keyLabel != null ? keyLabel + ": " : "") + JSON.stringify(value)));
+    }
+    return wrap;
+  }
+
+  loadOverview().catch(() => {});
+</script>
+</body>
+</html>

@@ -37,6 +37,13 @@ spec:
               value: {{ .Values.server.port | quote }}
             - name: DB_PATH
               value: /app/data/sync.db
+            {{- if .Values.server.adminPasswordSecretName }}
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.adminPasswordSecretName }}
+                  key: {{ .Values.server.adminPasswordSecretKey }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /app/data

@@ -25,6 +25,10 @@ ingress:
           pathType: Prefix
           service: server
           port: 8081
+        - path: "/admin"
+          pathType: Prefix
+          service: server
+          port: 8081
   tls: []
 
 resources:
@@ -47,6 +51,12 @@ server:
   port: 8081
   persistence:
     size: 256Mi
+  # Gates the hidden /admin operator page (server/admin.html). Left blank by
+  # default so the page stays disabled until a real secret is wired up — the
+  # password itself lives in a Kubernetes Secret created directly on the
+  # cluster, never in this file or git. See CLAUDE.md.
+  adminPasswordSecretName: ""
+  adminPasswordSecretKey: "password"
   resources:
     requests:
       cpu: 10m

@@ -50,6 +50,7 @@ async function httpTests() {
   const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mila-sync-http-")), "test.db");
   process.env.DB_PATH = dbPath;
   process.env.PORT = "0";
+  process.env.ADMIN_PASSWORD = "topsecret123";
   delete require.cache[require.resolve("./index")];
   const { server } = require("./index");
 
@@ -57,18 +58,16 @@ async function httpTests() {
   const port = server.address().port;
   const base = `http://127.0.0.1:${port}`;
 
-  const req = (method, urlPath, body) =>
+  const req = (method, urlPath, body, cookie) =>
     new Promise((resolve, reject) => {
       const data = body ? JSON.stringify(body) : null;
-      const r = http.request(
-        base + urlPath,
-        { method, headers: data ? { "Content-Type": "application/json" } : {} },
-        (res) => {
-          let raw = "";
-          res.on("data", (c) => (raw += c));
-          res.on("end", () => resolve({ status: res.statusCode, body: raw ? JSON.parse(raw) : null }));
-        }
-      );
+      const headers = data ? { "Content-Type": "application/json" } : {};
+      if (cookie) headers.Cookie = cookie;
+      const r = http.request(base + urlPath, { method, headers }, (res) => {
+        let raw = "";
+        res.on("data", (c) => (raw += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: raw ? JSON.parse(raw) : null }));
+      });
       r.on("error", reject);
       if (data) r.write(data);
       r.end();
@@ -97,6 +96,46 @@ async function httpTests() {
 
   const goneNow = await req("GET", "/api/profiles/HELLO1");
   ok(goneNow.status === 404, "the code is gone after DELETE");
+
+  /* ---- admin: auth gate + overview/raw/detail ---- */
+  const snapshot = JSON.stringify({
+    name: "Tester",
+    stars: 42,
+    starsAllTime: 50,
+    visit: { dayStreak: 3, bestDayStreak: 5 },
+    medals: { gold: 1 },
+    stats: { attempts: 10, correct: 8, words: { cat: {}, dog: {} } }
+  });
+  await req("POST", "/api/profiles/ADMIN1/sync", { snapshot, updatedAt: 1000 });
+
+  const noAuth = await req("GET", "/api/admin/overview");
+  ok(noAuth.status === 401, "admin overview without a session cookie is unauthorized");
+
+  const badLogin = await req("POST", "/api/admin/login", { password: "wrong" });
+  ok(badLogin.status === 401, "wrong admin password is rejected");
+
+  const goodLogin = await req("POST", "/api/admin/login", { password: "topsecret123" });
+  ok(goodLogin.status === 200, "correct admin password is accepted");
+  const setCookie = goodLogin.headers["set-cookie"][0];
+  const cookie = setCookie.split(";")[0];
+
+  const overview = await req("GET", "/api/admin/overview", null, cookie);
+  ok(overview.status === 200, "admin overview with a valid cookie succeeds");
+  const row = overview.body.profiles.find((p) => p.code === "ADMIN1");
+  ok(!!row, "the synced profile appears in the overview");
+  ok(row.stars === 42 && row.dayStreak === 3, "overview reflects the profile's stars and streak");
+  ok(row.accuracy === 0.8, "overview computes accuracy from stats.attempts/correct");
+  ok(row.wordsTracked === 2, "overview counts tracked words");
+
+  const detail = await req("GET", "/api/admin/profiles/ADMIN1", null, cookie);
+  ok(detail.status === 200 && detail.body.profile.name === "Tester", "admin profile detail returns the parsed snapshot");
+
+  const raw = await req("GET", "/api/admin/raw", null, cookie);
+  ok(raw.status === 200 && raw.body.rows.some((r) => r.code === "ADMIN1"), "admin raw view lists the stored row");
+
+  await req("POST", "/api/admin/logout", null, cookie);
+  const afterLogout = await req("GET", "/api/admin/overview", null, cookie);
+  ok(afterLogout.status === 401, "the session cookie is invalid after logout");
 
   server.close();
 }

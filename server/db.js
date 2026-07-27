@@ -55,6 +55,11 @@ function makeStore(dbPath) {
       deleteStmt.run(code);
     },
 
+    /* Every row, newest first — backs the admin page's overview and raw views. */
+    listAll() {
+      return db.prepare("SELECT code, snapshot, updated_at FROM profiles ORDER BY updated_at DESC").all();
+    },
+
     close() {
       db.close();
     }
