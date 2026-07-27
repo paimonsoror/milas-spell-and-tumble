@@ -174,15 +174,26 @@ const Store = {
     return this.data;
   },
 
-  /* Gives a profile a pairing code and pushes its first snapshot, unless it
-     already has one or a grown-up deliberately turned sync off for it. Safe
-     to call on any profile, active or not — reconcileSync() takes the
-     profile explicitly rather than assuming this.data, so provisioning a
-     profile that isn't currently active never touches the wrong save. */
+  /* Gives a profile a pairing code (in memory) and attempts to push its
+     first snapshot, unless it already has a code or a grown-up deliberately
+     turned sync off for it. Safe to call on any profile, active or not —
+     reconcileSync() takes the profile explicitly rather than assuming
+     this.data, so provisioning a profile that isn't currently active never
+     touches the wrong save.
+
+     Deliberately does NOT call _saveLocalOnly() itself: load() runs this for
+     every profile on every page view, including the throwaway "Player 1"
+     placeholder a brand-new visitor hasn't claimed yet, and load() must stay
+     side-effect-free the way it always was — otherwise merely opening (or
+     refreshing) the page before anyone types a name silently writes that
+     placeholder to localStorage, and a refresh lands straight in "Player 1"
+     instead of showing the name screen again. Persistence still happens
+     normally: createProfile()/reset()/resetAll() call save() right after
+     this, and reconcileSync() below persists on its own once a push
+     actually succeeds. */
   _autoProvisionSync(profile) {
     if (!profile || profile.sync.localOnly || profile.sync.code) return;
     profile.sync.code = this._syncCode();
-    this._saveLocalOnly();
     this.reconcileSync(profile);
   },
 

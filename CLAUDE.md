@@ -313,6 +313,17 @@ once (`Store.linkWithCode()`) to know which profile to pull. "Automatic" means
 continuous background sync after that one lightweight pairing step, not
 zero-touch discovery across an arbitrary unpaired device.
 
+That last point was originally a documented limitation rather than a wired-up
+path: the only place `linkWithCode()` was reachable from was Settings, which a
+brand-new device can't reach without first creating (and thus diverging from)
+a placeholder profile of its own. The profile picker (`renderProfiles()` in
+`js/app.js`) now surfaces "Already playing on another device?" directly on
+the first-run name screen — reachable before anything is claimed, replaces
+the still-unclaimed placeholder rather than creating a second profile, and is
+deliberately absent from the "add another player" version of that same
+screen, since linking there would silently overwrite whichever profile
+happens to be active on that device.
+
 **The `/admin` page is a household-owner tool, not a player-facing surface.**
 It's server-rendered by `server/index.js` (`GET /admin`, plus a small
 `/api/admin/*` API) and shows, across every synced profile: stars, streaks,
@@ -397,3 +408,15 @@ real time here, so if you go back to it:
 - **Triangular bows read as cat ears** at avatar scale; they are rounded loops now.
 - **Her head overlapped the crowd.** The stands are three rows, not four, leaving a
   clean barrier wall behind her.
+- **A refresh on the "what's your name?" screen silently logged in as "Player 1".**
+  `load()` must stay side-effect-free until something real happens — it's always
+  been allowed to conjure a blank first-run placeholder in memory, but never to
+  write it to `localStorage` on its own. Two things broke that: sync
+  auto-provisioning's `_autoProvisionSync()` used to call `_saveLocalOnly()`
+  eagerly for every profile including the unclaimed placeholder, and
+  `applyProfileSettings()` called `Store.registerVisit()` (which persists)
+  unconditionally on every `init()`, firstRun or not. Both are now guarded —
+  provisioning persists only once a push actually succeeds, and
+  `registerVisit()` is skipped while `Store.firstRun` is still true — so a
+  page that's never been named stays unsaved, and a refresh asks again
+  instead of dropping straight into a nameless "Player 1".

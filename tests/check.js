@@ -174,6 +174,21 @@ ok(ctx.SKIN_TONES.some((t) => t.id === ctx.DEFAULT_LOOK.skin), "default skin exi
 /* ---- store ---- */
 ctx.Store.load(); // no localStorage in node; must not throw
 ok(ctx.Store.data.stars === 0, "fresh save starts at 0 stars");
+
+// load() must stay side-effect-free for a genuinely brand-new visitor: it's
+// allowed to conjure an in-memory "Player 1" placeholder (firstRun), but
+// must not write it to localStorage on its own — sync auto-provisioning
+// regressed this once already (it persisted the unclaimed placeholder on
+// every load, so refreshing the welcome screen before typing a name landed
+// straight in "Player 1" instead of asking again).
+ok(ctx.Store.firstRun === true, "an untouched browser starts as firstRun");
+ok(localStorage.getItem("mila-cartwheel-save-v1") === null,
+   "load() alone never writes a save file, even though it provisions a sync code in memory");
+ok(/^[A-Z0-9]{6}$/.test(ctx.Store.data.sync.code),
+   "the unclaimed placeholder still gets a sync code in memory, ready if a push succeeds");
+ctx.Store.load();
+ok(ctx.Store.firstRun === true, "reloading before ever saving still looks like a first visit");
+
 for (const slot of Object.keys(ctx.CATALOG)) {
   ok(ctx.Store.isOwned(slot, ctx.DEFAULT_LOOK[slot]), `${slot} default owned by default`);
 }

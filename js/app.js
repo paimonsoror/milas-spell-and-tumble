@@ -120,8 +120,12 @@ function applyProfileSettings() {
   if (studio) studio.gymnast.setLook(Store.data.look);
   if (lettersArena) lettersArena.gymnast.setLook(Store.data.look);
   document.title = `${Store.data.name}'s Spell & Tumble Championship`;
-  // every player keeps their own day streak, so this follows the switch
-  visitInfo = Store.registerVisit();
+  // every player keeps their own day streak, so this follows the switch —
+  // but skipped for a still-unclaimed firstRun placeholder: registerVisit()
+  // persists (it calls Store.save()), and running it before she's even typed
+  // a name would silently write that placeholder to localStorage, turning a
+  // page refresh on the name screen into an unwanted "Player 1" login.
+  if (!Store.firstRun) visitInfo = Store.registerVisit();
 }
 
 function playerName() {
@@ -379,6 +383,29 @@ function wireProfiles() {
     toast(`Welcome, ${name}! ⭐`);
     showScreen("home");
   });
+
+  // Only reachable on the first-run screen (see renderProfiles()) — linking
+  // here replaces the still-unclaimed placeholder profile, which is exactly
+  // what a brand-new device should do with an existing profile's code.
+  // Elsewhere (adding a second player on a device that already has real
+  // profiles) this button doesn't exist, since linking there would silently
+  // overwrite whichever profile happens to be active — a much more
+  // surprising thing to do from an "add a player" flow.
+  $("#profile-new").addEventListener("click", async (e) => {
+    if (!e.target.closest("#btn-profile-link")) return;
+    const code = $("#profile-link-code").value.trim().toUpperCase();
+    if (!code) return toast("Type a code first.");
+    const ok = await Store.linkWithCode(code);
+    if (ok) {
+      Store.firstRun = false; // the placeholder is now a real, claimed profile
+      applyProfileSettings();
+      sfx.fanfare("bronze");
+      toast(`Welcome back, ${playerName()}! ⭐`);
+      showScreen("home");
+    } else {
+      toast("Couldn't find that code — check it and try again.");
+    }
+  });
 }
 
 function renderProfiles() {
@@ -424,7 +451,21 @@ function renderProfiles() {
              placeholder="Type a name" style="flex:1 1 200px" autocomplete="off">
       <button class="btn" id="btn-profile-create">${first ? "Let's go! 🎀" : "＋ Add player"}</button>
     </div>
-    ${first ? "" : '<div class="row center" style="margin-top:10px"><button class="btn ghost small" data-go="home">← Back</button></div>'}`;
+    ${first ? "" : '<div class="row center" style="margin-top:10px"><button class="btn ghost small" data-go="home">← Back</button></div>'}
+    ${
+      first
+        ? `<div class="field" style="margin-top:18px;border-top:1px solid var(--line,#e5e5e5);padding-top:14px">
+             <label>Already playing on another device?</label>
+             <p class="muted" style="font-size:13px;margin:2px 0 8px">
+               Bring that profile here with its code, instead of starting a new one.</p>
+             <div class="row">
+               <input type="text" class="text-line" id="profile-link-code" maxlength="6"
+                      placeholder="ABC123" style="width:140px;text-transform:uppercase">
+               <button class="btn small ghost" id="btn-profile-link">Link this device</button>
+             </div>
+           </div>`
+        : ""
+    }`;
 
   // resets on every render — a new profile always starts from "Big Kid"
   // pre-selected, so an existing parent adding a second, older player never
