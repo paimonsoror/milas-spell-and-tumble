@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/paimonsoror/milas-spell-and-tumble
-  tag: "4c583172c5a0cbc589e24189f07d8926454f66a3"
+  tag: "f3539dc925b076379105b3a34ad53093fd3742ee"
   pullPolicy: IfNotPresent
 
 service:
@@ -42,7 +42,7 @@ server:
   enabled: true
   image:
     repository: ghcr.io/paimonsoror/milas-spell-and-tumble-server
-    tag: "4c583172c5a0cbc589e24189f07d8926454f66a3"
+    tag: "f3539dc925b076379105b3a34ad53093fd3742ee"
     pullPolicy: IfNotPresent
   port: 8081
   persistence:
