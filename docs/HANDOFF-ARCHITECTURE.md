@@ -193,9 +193,36 @@ surface:
 
 ## 10. Onward
 
-If you recommend adding server-side state, the curriculum specialist (still
-next in the content chain, not yet engaged) and any future UI/parents work
-should inherit a clear, explicit description of: what moved server-side, what
-stayed in `localStorage`, and what a client does when it's offline. Write that
-down the same way `HANDOFF-PARENTS.md` §8 wrote down its hook for the next
-specialist — a function/module name, not just a paragraph of intent.
+**Status: built.** The project owner's answers went further than this
+review's own recommendation — real two-way sync, LAN-only, with the database
+sharing authority rather than staying a disposable mirror. What shipped:
+
+- A minimal Node.js + `node:sqlite` backend (`server/`, zero npm dependencies
+  on purpose — nothing to native-compile in Docker) with four routes:
+  `GET /api/health`, `GET /api/profiles/:code`,
+  `POST /api/profiles/:code/sync`, `DELETE /api/profiles/:code`.
+- **Whole-snapshot, timestamp-wins reconciliation** — deliberately not
+  per-field merging or a CRDT, because a single child can't play on two
+  devices at the same instant, so a real conflict is a near-impossible edge
+  case. `Store.reconcileSync()` (`js/store.js`) is the client-side hook; it's
+  fire-and-forget, and silently does nothing offline or with sync off — the
+  zero-server folder copy of this game is unaffected either way.
+- A pairing code (`Store.enableSync()`/`rotateSyncCode()`/`disableSync()`) is
+  both the server-side lookup key and the bearer credential — no accounts,
+  matching this project's deliberate avoidance of them for a child user.
+- The read-only remote parent view this review originally scoped for came
+  along for free once the backend existed: `index.html`'s bootstrap checks
+  for `?code=`, and `initRemoteView()` in `js/app.js` reuses the existing
+  Progress/Word Detail render functions in a stripped-down mode rather than
+  building a parallel display surface.
+- Deployed as a second Deployment/Service/PVC in the same Helm chart, routed
+  on the same host via a new `/api` ingress path — no new hostname or DNS
+  record needed. The `latest`-tag/`imagePullPolicy: Always` issue flagged in
+  §4 is fixed: CI now pins both images to the build's immutable commit sha
+  and commits that back to `values.yaml` (`[skip ci]`, so it doesn't loop).
+- **Not built, by explicit scope decision**: the Docker-build repo-leak and
+  `replicas: 2`/PodDisruptionBudget items from §3 are still open — worth a
+  fast follow, they just weren't bundled into this pass.
+
+Nothing here touched `js/words.js` — flagging that explicitly for the
+curriculum specialist, same as `HANDOFF-PARENTS.md` did.

@@ -26,10 +26,12 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 > infrastructure question, not a gameplay one:
 >
 > - `HANDOFF-ARCHITECTURE.md` — cloud-native architecture review of the
->   Kubernetes deployment. **Active.** Asks whether "no server" — true since
->   this project began — still holds now that the app is deployed behind a
->   real ingress with a real cert, or whether cross-device sync / remote
->   parent visibility justify adding server-side state for the first time.
+>   Kubernetes deployment. **First pass built.** "No server" no longer holds:
+>   a minimal Node.js + SQLite backend (`server/`) now enables cross-device
+>   save sync and a read-only remote parent view via a pairing code, both
+>   opt-in and both fire-and-forget from the client's side, so the offline
+>   zero-server folder copy of this game is unaffected either way. Its §10
+>   is the exact hook for whoever touches this next.
 
 ## Running it
 
@@ -52,9 +54,16 @@ Web Speech API and flashes the word on screen instead.
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
 | `js/store.js` | localStorage persistence, profiles, stats, custom word lists |
 | `js/app.js` | Screens, game loop, avatar studio, coach's voice, grown-ups dashboard |
+| `server/` | Optional cross-device sync backend (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md` |
 
 Load order matters — `app.js` last, `words.js` first. They share globals rather than
 importing.
+
+`server/` is a separate deployable, not part of the client bundle — the game itself
+still has no build step and still runs from a double-clicked `index.html` with zero
+setup. It only ever gets talked to if a profile opts into sync (`Store.enableSync()`);
+every call to it is fire-and-forget from `js/store.js`, so a missing or unreachable
+server changes nothing about how the game plays.
 
 ## The avatar rig — read this before touching a skill
 
@@ -130,6 +139,14 @@ Two profile fields drive the engagement loop and are worth knowing about:
   days rather than milliseconds so daylight saving cannot break a streak.
   `registerVisit()` is idempotent within a day and is called from
   `applyProfileSettings()` — every profile has its own streak.
+- **`prefs`** — `{ pinned: { [word]: "boost"|"retire" }, reviewMix, focusNote }`.
+  What a grown-up has asked the game to concentrate on, from the Grown-Ups
+  dashboard's Focus tab. `Store.selectReviewPool()` is the one function that
+  reads `pinned`/`reviewMix`; `focusNote` is display-only and never read by
+  the game itself.
+- **`sync`** — `{ code, lastSyncedAt }`. Cross-device sync opt-in — see
+  `docs/HANDOFF-ARCHITECTURE.md`. `code` is `null` until a grown-up turns sync
+  on; every sync call is fire-and-forget and silently no-ops without one.
 
 - `migrate()` wraps a bare v1 save (no `profiles` key) into the file's first profile.
 - Every profile is merged onto a fresh `blankProfile()` on load, so saves written by
@@ -208,6 +225,15 @@ chosen coach voice so "slowly" and "spell it out" stay in character.
 **No external assets.** No fonts, images, or audio files — the figure is SVG, sound
 effects are synthesised in WebAudio, the crowd is generated. Keeps it a single
 double-clickable folder that works offline.
+
+**Cross-device sync is whole-snapshot and timestamp-wins, on purpose.** A single
+child can't play on two devices at the same instant, so a real conflict between
+devices is a near-impossible edge case — not worth field-level merging, CRDTs, or
+an operation log. `Store.reconcileSync()` sends the whole profile; whichever side
+(the device or the server) has the later timestamp wins outright, and the loser's
+differences are gone. If that assumption ever stops holding — e.g. two kids
+sharing one synced profile from different devices at once — revisit this rather
+than patching around it.
 
 ## Testing
 
