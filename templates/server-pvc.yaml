@@ -1,0 +1,15 @@
+{{- if .Values.server.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "milas-spell-and-tumble.fullname" . }}-server-data
+  labels:
+    {{- include "milas-spell-and-tumble.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sync-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size }}
+{{- end }}

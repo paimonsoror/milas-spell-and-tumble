@@ -1,0 +1,14 @@
+{
+  "name": "milas-spell-and-tumble-sync",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cross-device sync backend for Mila's Spell & Tumble Championship. No dependencies — node:http + node:sqlite only.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

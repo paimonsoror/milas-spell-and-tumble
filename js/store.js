@@ -71,7 +71,15 @@ function blankProfile(name) {
     medals: { gold: 0, silver: 0, bronze: 0, ribbon: 0 },
     best: { score: 0, streak: 0 },
     stats: { words: {}, sessions: [], attempts: 0, correct: 0 },
-    customLists: []
+    customLists: [],
+    // what a grown-up has asked the game to concentrate on for this profile —
+    // per-profile, same as everything else here. focusNote is display-only:
+    // it never feeds buildQueue(), it's a note for a person, not the algorithm.
+    prefs: { pinned: {}, reviewMix: 0.34, focusNote: "" },
+    // cross-device sync opt-in — see HANDOFF-ARCHITECTURE.md. Unset (code:
+    // null) means this profile has never opted in and stays purely local,
+    // exactly as every profile always has.
+    sync: { code: null, lastSyncedAt: null }
   };
 }
 
@@ -296,10 +304,27 @@ const Store = {
     w.lastSeen = Date.now();
     w.totalMs += msTaken || 0;
     if (usedHint) w.hints++;
-    if (wasRight) w.right++;
-    else w.wrong++;
+    if (wasRight) {
+      w.right++;
+      w.firstTry = (w.firstTry || 0) + 1;
+    } else {
+      w.wrong++;
+    }
     this.data.stats.attempts++;
     if (wasRight) this.data.stats.correct++;
+    this.save();
+  },
+
+  /* How she eventually got a word right (or didn't) after the first miss —
+     firstTry itself is recorded above; this only covers what happened next.
+     Additive counters read with (w.field||0), so words already in an older
+     save just start counting from zero — no migration needed. */
+  recordFixOutcome(word, tier) {
+    const w = this.data.stats.words[word];
+    if (!w) return;
+    if (tier === "retried") w.retried = (w.retried || 0) + 1;
+    else if (tier === "multipleChoice") w.multipleChoice = (w.multipleChoice || 0) + 1;
+    else if (tier === "unresolved") w.unresolved = (w.unresolved || 0) + 1;
     this.save();
   },
 
@@ -332,6 +357,46 @@ const Store = {
       .filter((r) => r.seen >= 2 && r.wrong === 0)
       .sort((a, b) => b.seen - a.seen || a.word.localeCompare(b.word));
     return limit ? rows.slice(0, limit) : rows;
+  },
+
+  /* ---- focus / review preferences (grown-ups dashboard) ---- */
+
+  setPinned(word, mode) {
+    // mode: "boost" | "retire" | null (unpin)
+    if (mode) this.data.prefs.pinned[word] = mode;
+    else delete this.data.prefs.pinned[word];
+    this.save();
+  },
+
+  setReviewMix(value) {
+    this.data.prefs.reviewMix = Math.max(0, Math.min(0.6, value));
+    this.save();
+  },
+
+  setFocusNote(text) {
+    this.data.prefs.focusNote = text;
+    this.save();
+  },
+
+  /* Splits a word list into a weighted-review pool and the rest, folding in
+     whatever a grown-up has pinned from the dashboard. Boosted words join the
+     review pool regardless of measured accuracy; retired words are pulled out
+     of it — they still appear at the normal random rate in "rest", because
+     retiring softens over-focus, it never removes a word from her curriculum.
+     A pure function of its arguments (doesn't read `this.data`), so it's
+     testable without a live Store and reachable from any word list. */
+  selectReviewPool(list, prefs, statsWords) {
+    const pinned = (prefs && prefs.pinned) || {};
+    const missed = new Set(
+      Object.keys(statsWords || {}).filter((w) => statsWords[w].wrong > 0)
+    );
+    for (const w of Object.keys(pinned)) {
+      if (pinned[w] === "boost") missed.add(w);
+    }
+    const isHard = (w) => missed.has(w) && pinned[w] !== "retire";
+    const hard = list.words.filter((pair) => isHard(pair[0]));
+    const rest = list.words.filter((pair) => !isHard(pair[0]));
+    return { hard, rest };
   },
 
   /* ---- custom word lists ---- */
@@ -374,6 +439,96 @@ const Store = {
     this.file = migrate(JSON.parse(text));
     localStorage.setItem(SAVE_KEY, JSON.stringify(this.file));
     this.load();
+  },
+
+  /* ---- cross-device sync (opt-in — see HANDOFF-ARCHITECTURE.md) ----
+     Whole-profile snapshots, timestamp-wins, never per-field merging: a
+     single child can't play on two devices at the same instant, so a real
+     conflict is a near-impossible edge case, and that's worth the
+     simplicity. Every call here is fire-and-forget from the caller's side —
+     localStorage stays the thing gameplay actually reads and writes; this
+     only ever updates it opportunistically alongside that, and silently
+     does nothing if there's no network or no sync server (the offline,
+     zero-server folder copy of this game keeps working exactly as before). */
+
+  _syncCode() {
+    const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I — easier to read aloud or type in
+    let code = "";
+    for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return code;
+  },
+
+  /* id and sync bookkeeping are always locally controlled — an incoming
+     snapshot from another device only ever replaces the gameplay content. */
+  _adoptSnapshot(json) {
+    const localId = this.data.id;
+    const localSync = this.data.sync;
+    const incoming = JSON.parse(json);
+    Object.assign(this.data, incoming);
+    this.data.id = localId;
+    this.data.sync = localSync;
+    this.save();
+  },
+
+  enableSync() {
+    this.data.sync.code = this._syncCode();
+    this.save();
+    this.reconcileSync();
+    return this.data.sync.code;
+  },
+
+  rotateSyncCode() {
+    const old = this.data.sync.code;
+    if (old) fetch(`/api/profiles/${old}`, { method: "DELETE" }).catch(() => {});
+    return this.enableSync();
+  },
+
+  disableSync() {
+    const old = this.data.sync.code;
+    if (old) fetch(`/api/profiles/${old}`, { method: "DELETE" }).catch(() => {});
+    this.data.sync.code = null;
+    this.save();
+  },
+
+  /* Pulls another device's synced profile down and replaces this profile's
+     local data with it — for onboarding a second device. Destructive to
+     whatever was here before; the caller must confirm with the parent first.
+     Resolves true/false rather than throwing, since a failed link is an
+     expected, recoverable outcome (wrong code, offline), not an error state. */
+  async linkWithCode(code) {
+    try {
+      const res = await fetch(`/api/profiles/${code}`);
+      if (!res.ok) return false;
+      const { snapshot } = await res.json();
+      this._adoptSnapshot(snapshot);
+      this.data.sync.code = code;
+      this.data.sync.lastSyncedAt = Date.now();
+      this.save();
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  /* The push/pull round trip. No-ops silently if this profile hasn't opted
+     into sync, or the server isn't reachable. */
+  async reconcileSync() {
+    const code = this.data.sync.code;
+    if (!code) return;
+    try {
+      const res = await fetch(`/api/profiles/${code}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshot: JSON.stringify(this.data), updatedAt: Date.now() })
+      });
+      if (!res.ok) return;
+      const result = await res.json();
+      if (result.pulled) this._adoptSnapshot(result.snapshot);
+      this.data.sync.lastSyncedAt = Date.now();
+      this.save();
+    } catch {
+      // offline, or the sync server isn't there — fine, this is retried next trigger
+    }
   }
 };
 

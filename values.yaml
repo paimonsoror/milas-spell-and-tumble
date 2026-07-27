@@ -16,8 +16,15 @@ ingress:
   hosts:
     - host: spelltumble.example.com
       paths:
+        # "service"/"port" are optional per path — default to the main static
+        # site above. The sync API gets routed here on the same host/cert,
+        # no new hostname or DNS record needed.
         - path: "/"
           pathType: Prefix
+        - path: "/api"
+          pathType: Prefix
+          service: server
+          port: 8081
   tls: []
 
 resources:
@@ -27,3 +34,23 @@ resources:
   limits:
     cpu: 200m
     memory: 128Mi
+
+# The cross-device sync backend — see HANDOFF-ARCHITECTURE.md. Deliberately
+# tiny: no npm dependencies (node:http + node:sqlite only), 1 replica (SQLite
+# is single-writer), a small PVC for its one database file.
+server:
+  enabled: true
+  image:
+    repository: ghcr.io/paimonsoror/milas-spell-and-tumble-server
+    tag: latest
+    pullPolicy: Always
+  port: 8081
+  persistence:
+    size: 256Mi
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 96Mi

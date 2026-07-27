@@ -1,0 +1,61 @@
+{{- if .Values.server.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "milas-spell-and-tumble.fullname" . }}-server
+  labels:
+    {{- include "milas-spell-and-tumble.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sync-server
+spec:
+  # SQLite is single-writer, and this is a household-scale app, not a
+  # scaling problem — one replica is the correct answer, not a placeholder.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "milas-spell-and-tumble.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sync-server
+  template:
+    metadata:
+      labels:
+        {{- include "milas-spell-and-tumble.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sync-server
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: sync-server
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.server.port | quote }}
+            - name: DB_PATH
+              value: /app/data/sync.db
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "milas-spell-and-tumble.fullname" . }}-server-data
+{{- end }}

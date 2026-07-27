@@ -102,6 +102,11 @@ p { margin: 0 0 .8em; line-height: 1.5; }
   border: 3px solid var(--line); box-shadow: var(--shadow-sm);
 }
 .btn.small { font-size: 15px; padding: 9px 16px; border-radius: 12px; }
+.btn.pin {
+  font-size: 15px; padding: 3px 7px; border-radius: 8px; box-shadow: none;
+  background: #fff; color: var(--ink-soft); border: 2px solid var(--line);
+}
+.btn.pin[aria-pressed="true"] { border-color: var(--gold); background: #fffbeb; }
 
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
 .row.center { justify-content: center; }

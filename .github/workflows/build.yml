@@ -1,4 +1,4 @@
-name: Build and push image
+name: Build and push images
 
 on:
   push:
@@ -6,12 +6,13 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/milas-spell-and-tumble
+  SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/milas-spell-and-tumble-server
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +24,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push the game image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -31,3 +32,30 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
+
+      - name: Build and push the sync server image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          push: true
+          tags: |
+            ${{ env.SERVER_IMAGE }}:latest
+            ${{ env.SERVER_IMAGE }}:${{ github.sha }}
+
+      # GitOps reproducibility only holds if what's deployed matches what's in
+      # git. ":latest" + "Always" meant a pod restart for any reason could
+      # silently run a different build than the last ArgoCD sync — this pins
+      # both images to this build's immutable sha and commits that back, so
+      # the chart in git is always the source of truth for what actually runs.
+      - name: Pin the Helm chart to this build's immutable tags
+        run: |
+          # matches "tag: latest" on the first-ever run and "tag: \"<prior sha>\"" on
+          # every run after, so this stays idempotent regardless of what's currently pinned
+          sed -i 's/tag: .*/tag: "${{ github.sha }}"/g; s/pullPolicy: Always/pullPolicy: IfNotPresent/g' values.yaml
+          if ! git diff --quiet -- values.yaml; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add values.yaml
+            git commit -m "Pin deployed image tags to ${{ github.sha }} [skip ci]"
+            git push
+          fi

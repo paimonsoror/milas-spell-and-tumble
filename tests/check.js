@@ -17,7 +17,10 @@ const ctx = vm.createContext({
   performance: { now: () => clock.t },
   requestAnimationFrame: (cb) => { clock.queue.push({ id: clock.next, cb }); return clock.next++; },
   cancelAnimationFrame: (id) => { clock.queue = clock.queue.filter((j) => j.id !== id); },
-  setTimeout, setImmediate, queueMicrotask, Promise
+  setTimeout, setImmediate, queueMicrotask, Promise,
+  // no real network in tests — simulates "offline / no sync server", which
+  // reconcileSync()'s own try/catch must swallow without throwing
+  fetch: () => Promise.reject(new Error("no network in tests"))
 });
 const src =
   ["words.js", "avatar.js", "skills.js", "store.js"].map((f) => fs.readFileSync(path + f, "utf8")).join("\n") +
@@ -307,6 +310,44 @@ ok(ctx.Store.data.stats.sessions.length === 0, "an old save gains missing struct
 ok(ctx.Store.data.goal === null, "an old save gains the goal field");
 ok(ctx.Store.data.visit && ctx.Store.data.visit.dayStreak === 0, "an old save gains the visit record");
 ok(ctx.Store.isOwned("bow", "small"), "free items are owned after migrating an old save");
+ok(ctx.Store.data.prefs && ctx.Store.data.prefs.reviewMix === 0.34, "an old save gains the prefs default review mix");
+ok(Object.keys(ctx.Store.data.prefs.pinned).length === 0, "an old save gains an empty pinned list");
+ok(ctx.Store.data.prefs.focusNote === "", "an old save gains an empty focus note");
+ok(ctx.Store.data.sync && ctx.Store.data.sync.code === null, "an old save gains sync, opted out by default");
+ok(ctx.Store.data.sync.lastSyncedAt === null, "an old save's sync has never synced");
+
+/* ---- cross-device sync: must never throw or block when offline ---- */
+{
+  const code = ctx.Store.enableSync();
+  ok(/^[A-Z0-9]{6}$/.test(code), `enableSync() returns a 6-char code (got "${code}")`);
+  ok(ctx.Store.data.sync.code === code, "enableSync() stores the code on the active profile");
+  await new Promise((r) => setImmediate(r)); // let the fire-and-forget reconcileSync() settle
+  ok(true, "enableSync()/reconcileSync() did not throw with no network reachable");
+
+  const linked = await ctx.Store.linkWithCode("NOPE99");
+  ok(linked === false, "linkWithCode() resolves false, rather than throwing, when the server is unreachable");
+}
+
+/* ---- selectReviewPool ---- */
+{
+  const list = { words: [["cat", ""], ["dog", ""], ["bird", ""], ["fish", ""]] };
+  const statsWords = {
+    cat: { seen: 4, right: 1, wrong: 3 },  // genuinely missed
+    dog: { seen: 4, right: 4, wrong: 0 }   // never missed
+  };
+
+  const plain = ctx.Store.selectReviewPool(list, { pinned: {} }, statsWords);
+  ok(plain.hard.length === 1 && plain.hard[0][0] === "cat", "selectReviewPool puts only missed words in the hard pool");
+  ok(plain.rest.length === 3, "selectReviewPool puts everything else in rest");
+
+  const boosted = ctx.Store.selectReviewPool(list, { pinned: { bird: "boost" } }, statsWords);
+  ok(boosted.hard.some((p) => p[0] === "bird"), "a boosted word joins the hard pool even with no misses recorded");
+  ok(boosted.hard.some((p) => p[0] === "cat"), "boosting doesn't drop a genuinely missed word");
+
+  const retired = ctx.Store.selectReviewPool(list, { pinned: { cat: "retire" } }, statsWords);
+  ok(!retired.hard.some((p) => p[0] === "cat"), "a retired word is excluded from the hard pool");
+  ok(retired.rest.some((p) => p[0] === "cat"), "a retired word still appears in rest, not removed from her curriculum");
+}
 
 // export/import must round-trip every player
 ctx.Store.createProfile("Backup Buddy");

@@ -10,12 +10,19 @@ let arena = null;   // { gymnast, animator }
 let studio = null;  // { gymnast, animator }
 let session = null;
 let parentsUnlocked = false;
+// true only in the ?code=XXXXXX remote-view boot path (see initRemoteView) —
+// a parent looking at a synced profile from another device, read-only,
+// never able to write anything back to it
+let remoteReadOnly = false;
 
 /* ============================================================
    boot
    ============================================================ */
 
 function init() {
+  const remoteCode = new URLSearchParams(location.search).get("code");
+  if (remoteCode) return initRemoteView(remoteCode);
+
   Store.load();
   applyProfileSettings();
 
@@ -46,6 +53,45 @@ function init() {
   refreshHome();
 
   if (Store.firstRun) showScreen("profiles");
+
+  // opportunistic and fire-and-forget — no-ops instantly if this profile
+  // never opted into sync, and silently does nothing if there's no network
+  // or no sync server, so the offline folder copy of this game is unaffected
+  Store.reconcileSync();
+}
+
+/* A parent viewing a synced profile from another device, via a link like
+   spelltumble.sororlab.dev/?code=ABC123 — read-only, no local save touched,
+   no math-question gate (having the code is already the credential). Reuses
+   the same dashboard render functions as the local Grown-Ups dashboard;
+   pinButtons()/wirePinButtons() check `remoteReadOnly` themselves so nothing
+   here can write back to the fetched profile. */
+async function initRemoteView(code) {
+  remoteReadOnly = true;
+  try {
+    const res = await fetch(`/api/profiles/${code}`);
+    if (!res.ok) throw new Error("not found");
+    const { snapshot } = await res.json();
+    const profile = JSON.parse(snapshot);
+    Store.file = { v: 2, activeId: profile.id, order: [profile.id], profiles: { [profile.id]: profile } };
+    Store.data = profile;
+  } catch {
+    document.body.innerHTML =
+      '<div class="card" style="max-width:480px;margin:60px auto;text-align:center">' +
+      "<h2>Can't load this view</h2>" +
+      '<p class="muted">The code may be wrong, or the sync server isn\'t reachable right now.</p></div>';
+    return;
+  }
+
+  wireParents();
+  parentsUnlocked = true;
+  $$(".tab").forEach((t) => {
+    if (!["progress", "words"].includes(t.dataset.tab)) t.style.display = "none";
+  });
+  renderParents();
+  showScreen("parents");
+  const back = $('#screen-parents [data-go="home"]');
+  if (back) back.style.display = "none";
 }
 
 /* Everything that has to follow the active player when profiles are switched. */
@@ -538,10 +584,10 @@ function shuffle(arr) {
    so practice keeps circling back to the hard ones. */
 function buildQueue(list, count) {
   const pool = list.words;
-  const trouble = new Set(Store.troubleWords().map((r) => r.word));
-  const hard = shuffle(pool.filter((w) => trouble.has(w[0])));
-  const rest = shuffle(pool.filter((w) => !trouble.has(w[0])));
-  const wantHard = Math.min(hard.length, Math.floor(count * 0.34));
+  const { hard: hardPairs, rest: restPairs } = Store.selectReviewPool(list, Store.data.prefs, Store.data.stats.words);
+  const hard = shuffle(hardPairs);
+  const rest = shuffle(restPairs);
+  const wantHard = Math.min(hard.length, Math.floor(count * Store.data.prefs.reviewMix));
   const picked = hard.slice(0, wantHard).concat(rest.slice(0, count - wantHard));
   return shuffle(picked.length ? picked : shuffle(pool).slice(0, count));
 }
@@ -813,7 +859,7 @@ function submitAnswer() {
     // not the full first-try reward (points / streak / a performed skill)
     $("#btn-submit").disabled = true;
     $("#btn-hint").disabled = true;
-    rewardFix(word);
+    rewardFix(word, "retried");
   } else if (session.tries === 1) {
     handleFirstMiss(word);
   } else if (session.tries === 2) {
@@ -982,8 +1028,9 @@ function pickChoice(word, btnEl) {
 
   speaker.cancel();
   if (right) {
-    rewardFix(word);
+    rewardFix(word, "multipleChoice");
   } else {
+    Store.recordFixOutcome(word, "unresolved");
     arena.gymnast.setExpression("focused");
     speaker.spellOut(word);
     showFeedback(
@@ -1000,8 +1047,10 @@ function pickChoice(word, btnEl) {
 }
 
 /* Shared "she got there in the end" reward — a retry (try 2/3) or a correct
-   multiple-choice pick, never the full first-try reward. */
-function rewardFix(word) {
+   multiple-choice pick, never the full first-try reward. tier records *how*
+   she got there, for the Word Detail tab's per-word breakdown. */
+function rewardFix(word, tier) {
+  Store.recordFixOutcome(word, tier);
   sfx.star();
   Store.addStars(1);
   session.stars += 1;
@@ -1137,6 +1186,7 @@ function finishSession() {
   renderResults(s, summary, judges, medal);
   session = null;
   showScreen("results");
+  Store.reconcileSync(); // fire-and-forget, see initRemoteView()'s comment
 }
 
 function renderResults(s, summary, judges, medal) {
@@ -1484,15 +1534,54 @@ function wireParents() {
 }
 
 function renderParents() {
+  if (remoteReadOnly) {
+    // just the two views worth showing about someone else's progress,
+    // read-only — no Focus/Lists/Players/Settings, nothing here should be
+    // editable from a device that doesn't own this profile's local save
+    renderProgressTab();
+    renderWordsTab();
+    return;
+  }
   if (!parentsUnlocked) {
     renderGate();
     return;
   }
   renderProgressTab();
+  renderFocusTab();
   renderWordsTab();
   renderListsTab();
   renderPlayersTab();
   renderSettingsTab();
+}
+
+/* Read-only summary of a profile that isn't the active one — same shape as
+   the Progress tab's stat tiles and trouble list, but no pin controls: this
+   is a peek, not an editing surface, and you shouldn't need to switch
+   profiles just to see how a sibling is doing. */
+function renderPeekContent(p) {
+  const st = p.stats || { attempts: 0, correct: 0, sessions: [], words: {} };
+  const acc = st.attempts ? st.correct / st.attempts : 0;
+  const words = st.words || {};
+  const trouble = Object.entries(words)
+    .map(([word, s]) => ({ word, ...s, accuracy: s.seen ? s.right / s.seen : 0 }))
+    .filter((r) => r.wrong > 0)
+    .sort((a, b) => b.wrong - a.wrong || a.word.localeCompare(b.word))
+    .slice(0, 5);
+
+  return `
+    <div class="stat-grid" style="margin:10px 0">
+      <div class="stat-box"><div class="k">Words attempted</div><div class="v">${st.attempts}</div></div>
+      <div class="stat-box"><div class="k">Accuracy</div><div class="v">${pct(acc)}</div></div>
+      <div class="stat-box"><div class="k">Sessions</div><div class="v">${(st.sessions || []).length}</div></div>
+      <div class="stat-box"><div class="k">Stars</div><div class="v">${p.stars} ⭐</div></div>
+    </div>
+    ${
+      trouble.length
+        ? `<p class="muted" style="font-size:14px;margin-bottom:4px">Still practicing: ${trouble
+            .map((r) => escapeHtml(r.word))
+            .join(", ")}</p>`
+        : `<p class="muted" style="font-size:14px">No misses recorded yet.</p>`
+    }`;
 }
 
 function renderPlayersTab() {
@@ -1509,17 +1598,19 @@ function renderPlayersTab() {
         <td>${p.stars} ⭐</td>
         <td>${active ? '<b style="color:var(--purple-deep)">playing</b>'
               : `<button class="btn small ghost" data-switch="${p.id}">Switch to</button>`}</td>
+        <td>${active ? '<span class="muted">—</span>' : `<button class="btn small ghost" data-peek="${p.id}">Peek</button>`}</td>
         <td>${only ? '<span class="muted">—</span>'
               : `<button class="btn small ghost" data-delplayer="${p.id}">Delete</button>`}</td>
-      </tr>`;
+      </tr>
+      <tr class="peek-row" id="peek-${p.id}" style="display:none"><td colspan="7"></td></tr>`;
     })
     .join("");
 
   $("#tab-players").innerHTML = `
     <p class="muted">Each player keeps their own stars, unlocked items, word history and settings.
-       Edit a name to rename that player.</p>
+       Edit a name to rename that player. "Peek" shows a profile's progress without switching to it.</p>
     <table class="data">
-      <thead><tr><th>Name</th><th>Words</th><th>Accuracy</th><th>Sessions</th><th>Stars</th><th></th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Words</th><th>Accuracy</th><th>Sessions</th><th>Stars</th><th></th><th></th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="slider-row" style="margin-top:18px">
@@ -1535,6 +1626,20 @@ function renderPlayersTab() {
     renderPlayersTab();
     toast(`Added ${name}.`);
   });
+
+  $$("[data-peek]", $("#tab-players")).forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const row = $("#peek-" + btn.dataset.peek);
+      const open = row.style.display !== "none";
+      if (open) {
+        row.style.display = "none";
+        return;
+      }
+      const p = Store.file.profiles[btn.dataset.peek];
+      row.querySelector("td").innerHTML = renderPeekContent(p);
+      row.style.display = "";
+    })
+  );
 }
 
 function renderGate() {
@@ -1547,6 +1652,7 @@ function renderGate() {
       <input type="text" class="text-line" id="gate-answer" inputmode="numeric" style="width:120px" aria-label="Answer">
       <button class="btn" id="gate-go">Unlock</button>
     </div>`;
+  $("#tab-focus").innerHTML = "";
   $("#tab-words").innerHTML = "";
   $("#tab-lists").innerHTML = "";
   $("#tab-settings").innerHTML = "";
@@ -1569,6 +1675,16 @@ function renderGate() {
 
 function pct(n) {
   return Math.round(n * 100) + "%";
+}
+
+/* Monday-of-the-week timestamp, used to bucket sessions for the by-week
+   rollup — local calendar, same reasoning as Store's dayKey(). */
+function weekKey(ts) {
+  const d = new Date(ts);
+  const day = (d.getDay() + 6) % 7; // 0 = Monday
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - day);
+  return d.getTime();
 }
 
 function renderProgressTab() {
@@ -1599,12 +1715,35 @@ function renderProgressTab() {
             <td class="word">${escapeHtml(r.word)}</td>
             <td>${r.wrong} miss${r.wrong === 1 ? "" : "es"}</td>
             <td>${r.seen} tries</td>
-            <td style="width:32%"><div class="bar ${cls}"><i style="width:${Math.round(a * 100)}%"></i></div></td>
+            <td style="width:26%"><div class="bar ${cls}"><i style="width:${Math.round(a * 100)}%"></i></div></td>
             <td>${pct(a)}</td>
+            <td>${pinButtons(r.word)}</td>
           </tr>`;
         })
         .join("")
-    : `<tr><td colspan="5" class="muted">No misses recorded yet.</td></tr>`;
+    : `<tr><td colspan="6" class="muted">No misses recorded yet.</td></tr>`;
+
+  // by-week rollup, computed on read from the same capped sessions array —
+  // no new storage, just a coarser view than the last-24 bar chart above
+  const weekMap = new Map();
+  for (const s of st.sessions) {
+    const wk = weekKey(s.ts);
+    const w = weekMap.get(wk) || { correct: 0, total: 0, ts: s.ts };
+    w.correct += s.correct || 0;
+    w.total += s.total || 0;
+    w.ts = Math.max(w.ts, s.ts);
+    weekMap.set(wk, w);
+  }
+  const weeks = [...weekMap.values()].sort((a, b) => a.ts - b.ts).slice(-10);
+  const weekBars = weeks
+    .map((w) => {
+      const a = w.total ? w.correct / w.total : 0;
+      const cls = a >= 0.9 ? "" : a >= 0.7 ? "low" : "bad";
+      const h = Math.max(6, Math.round(a * 90));
+      const when = new Date(w.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return `<div class="col ${cls}" style="height:${h}px" title="Week of ${when} · ${w.correct}/${w.total} (${pct(a)})"></div>`;
+    })
+    .join("");
 
   const recent = st.sessions
     .slice(-8)
@@ -1635,16 +1774,127 @@ function renderProgressTab() {
     <h3>Accuracy over the last ${sessions.length || 0} sessions</h3>
     ${sessions.length ? `<div class="trend">${bars}</div>` : '<p class="muted">Play a session and this chart fills in.</p>'}
 
-    <h3 style="margin-top:24px">Words she finds hardest</h3>
-    <table class="data"><thead><tr><th>Word</th><th>Misses</th><th>Tries</th><th>Accuracy</th><th></th></tr></thead>
+    ${
+      weeks.length > 1
+        ? `<h3 style="margin-top:24px">By week</h3><div class="trend">${weekBars}</div>`
+        : ""
+    }
+
+    <h3 style="margin-top:24px">Still practicing</h3>
+    <p class="muted" style="font-size:14px">⭐ practices a word more often, 💤 eases off it — pin from here or Word Detail.</p>
+    <table class="data"><thead><tr><th>Word</th><th>Misses</th><th>Tries</th><th>Accuracy</th><th></th><th></th></tr></thead>
       <tbody>${troubleRows}</tbody></table>
 
     <h3 style="margin-top:24px">Recent sessions</h3>
     <table class="data"><thead><tr><th>When</th><th>Mode</th><th>List</th><th>Correct</th><th>Score</th><th></th></tr></thead>
       <tbody>${recent || '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'}</tbody></table>`;
+
+  wirePinButtons($("#tab-progress"), () => {
+    renderProgressTab();
+    renderFocusTab();
+    renderWordsTab();
+  });
+}
+
+/* Shared boost/retire toggle used on both the Progress and Word Detail
+   tables — pinning a word is always available wherever that word already
+   shows up, rather than forcing a trip to the Focus tab. */
+function pinButtons(word) {
+  if (remoteReadOnly) return "";
+  const mode = Store.data.prefs.pinned[word];
+  return `<button class="btn pin" data-pin="boost" data-word="${escapeHtml(word)}" aria-pressed="${mode === "boost"}" title="Practice this word more">⭐</button>
+          <button class="btn pin" data-pin="retire" data-word="${escapeHtml(word)}" aria-pressed="${mode === "retire"}" title="Ease off this word">💤</button>`;
+}
+
+// a few seconds' debounce so a burst of pin/unpin clicks or note edits
+// doesn't fire a sync round-trip per keystroke — still fire-and-forget,
+// still a no-op offline or with sync off
+let _syncDebounceTimer = null;
+function debouncedSync() {
+  clearTimeout(_syncDebounceTimer);
+  _syncDebounceTimer = setTimeout(() => Store.reconcileSync(), 3000);
+}
+
+function wirePinButtons(container, afterChange) {
+  $$("[data-pin]", container).forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const word = btn.dataset.word;
+      const mode = btn.dataset.pin;
+      const already = Store.data.prefs.pinned[word] === mode;
+      Store.setPinned(word, already ? null : mode);
+      afterChange();
+      debouncedSync();
+    })
+  );
+}
+
+/* One place to see and undo everything currently steering practice — the
+   review-mix slider and pins live here in Focus, but the pins themselves are
+   set from the Progress and Word Detail tables, wherever a word already shows up. */
+function renderFocusTab() {
+  const prefs = Store.data.prefs;
+  const pins = Object.entries(prefs.pinned);
+
+  const pinRows = pins.length
+    ? pins
+        .map(
+          ([word, mode]) => `<tr>
+            <td class="word">${escapeHtml(word)}</td>
+            <td>${mode === "boost" ? "⭐ Practice more" : "💤 Ease off"}</td>
+            <td><button class="btn small ghost" data-unpin="${escapeHtml(word)}">Unpin</button></td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="3" class="muted">Nothing pinned yet — pin words from Progress or Word Detail.</td></tr>`;
+
+  $("#tab-focus").innerHTML = `
+    <div class="notice">This tab nudges which words come up more, or less, often. It never
+      marks anything wrong — pinning a word just changes how often it's practiced.</div>
+
+    <div class="field">
+      <label for="focus-mix">How much of a routine should circle back to tricky/boosted words?</label>
+      <input type="range" id="focus-mix" min="0" max="0.6" step="0.02" value="${prefs.reviewMix}" style="width:100%;max-width:340px">
+      <span class="muted" id="focus-mix-val">${Math.round(prefs.reviewMix * 100)}% of each routine</span>
+    </div>
+
+    <div class="field" style="margin-top:18px">
+      <label for="focus-note">Notes to yourself</label>
+      <textarea id="focus-note" class="list-edit" placeholder="e.g. work on -tion endings this week">${escapeHtml(prefs.focusNote)}</textarea>
+      <p class="muted" style="font-size:13px">This is just a note for you — it doesn't change which words she gets, it's not read by the game.</p>
+    </div>
+
+    <h3 style="margin-top:22px">Pinned words</h3>
+    <table class="data"><thead><tr><th>Word</th><th>What it does</th><th></th></tr></thead>
+      <tbody>${pinRows}</tbody></table>`;
+
+  const mix = $("#focus-mix");
+  mix.addEventListener("input", () => {
+    $("#focus-mix-val").textContent = `${Math.round(Number(mix.value) * 100)}% of each routine`;
+  });
+  mix.addEventListener("change", () => {
+    Store.setReviewMix(Number(mix.value));
+    debouncedSync();
+  });
+
+  const note = $("#focus-note");
+  note.addEventListener("change", () => {
+    Store.setFocusNote(note.value);
+    debouncedSync();
+  });
+
+  $$("[data-unpin]", $("#tab-focus")).forEach((btn) =>
+    btn.addEventListener("click", () => {
+      Store.setPinned(btn.dataset.unpin, null);
+      renderFocusTab();
+      renderProgressTab();
+      renderWordsTab();
+      toast(`Unpinned "${btn.dataset.unpin}".`);
+    })
+  );
 }
 
 function renderWordsTab() {
+  const pinned = Store.data.prefs.pinned;
   const rows = Object.entries(Store.data.stats.words)
     .map(([word, s]) => ({
       word,
@@ -1654,40 +1904,66 @@ function renderWordsTab() {
     }))
     .sort((a, b) => b.wrong - a.wrong || b.seen - a.seen || a.word.localeCompare(b.word));
 
+  // how she eventually got there, when the first try wasn't it — a quieter
+  // read on difficulty than a bare right/wrong count
+  const needed = (r) => {
+    const bits = [];
+    if (r.retried) bits.push(`<span title="Needed a retry">↻${r.retried}</span>`);
+    if (r.multipleChoice) bits.push(`<span title="Needed multiple choice">❓${r.multipleChoice}</span>`);
+    if (r.unresolved) bits.push(`<span title="Not yet, even with multiple choice">•${r.unresolved}</span>`);
+    return bits.join(" ") || `<span class="muted">—</span>`;
+  };
+
   $("#tab-words").innerHTML = `
     <div class="row" style="margin-bottom:12px">
       <input type="text" class="text-line" id="word-filter" placeholder="Filter words…" style="flex:1 1 200px">
+      <label class="toggle"><input type="checkbox" id="word-pinned-only"> Pinned only</label>
       <span class="muted">${rows.length} words tracked</span>
     </div>
     <table class="data" id="word-table">
-      <thead><tr><th>Word</th><th>Tries</th><th>Right</th><th>Wrong</th><th>Hints</th><th>Avg time</th><th>Accuracy</th></tr></thead>
+      <thead><tr><th>Word</th><th>Tries</th><th>Right</th><th>Wrong</th><th>Hints</th><th>Needed help</th><th>Avg time</th><th>Accuracy</th><th></th></tr></thead>
       <tbody>${
         rows.length
           ? rows
               .map(
-                (r) => `<tr data-word="${escapeHtml(r.word)}">
+                (r) => `<tr data-word="${escapeHtml(r.word)}" data-pinned="${Boolean(pinned[r.word])}">
                   <td class="word">${escapeHtml(r.word)}</td>
                   <td>${r.seen}</td><td>${r.right}</td><td>${r.wrong}</td><td>${r.hints || 0}</td>
+                  <td>${needed(r)}</td>
                   <td>${r.avgSec.toFixed(1)}s</td>
-                  <td style="width:22%"><div class="bar ${r.accuracy >= 0.9 ? "" : r.accuracy >= 0.6 ? "warn" : "bad"}">
+                  <td style="width:18%"><div class="bar ${r.accuracy >= 0.9 ? "" : r.accuracy >= 0.6 ? "warn" : "bad"}">
                     <i style="width:${Math.round(r.accuracy * 100)}%"></i></div></td>
+                  <td>${pinButtons(r.word)}</td>
                 </tr>`
               )
               .join("")
-          : '<tr><td colspan="7" class="muted">No words practised yet.</td></tr>'
+          : '<tr><td colspan="9" class="muted">No words practised yet.</td></tr>'
       }</tbody>
     </table>`;
 
-  const filter = $("#word-filter");
-  if (filter) {
-    filter.addEventListener("input", () => {
-      const q = filter.value.trim().toLowerCase();
-      $$("#word-table tbody tr").forEach((tr) => {
-        const w = (tr.dataset.word || "").toLowerCase();
-        tr.style.display = !q || w.indexOf(q) !== -1 ? "" : "none";
-      });
+  const applyFilter = () => {
+    const q = filter.value.trim().toLowerCase();
+    const pinnedOnly = pinnedOnlyBox.checked;
+    $$("#word-table tbody tr").forEach((tr) => {
+      const w = (tr.dataset.word || "").toLowerCase();
+      const matchesText = !q || w.indexOf(q) !== -1;
+      const matchesPin = !pinnedOnly || tr.dataset.pinned === "true";
+      tr.style.display = matchesText && matchesPin ? "" : "none";
     });
+  };
+
+  const filter = $("#word-filter");
+  const pinnedOnlyBox = $("#word-pinned-only");
+  if (filter) {
+    filter.addEventListener("input", applyFilter);
+    pinnedOnlyBox.addEventListener("change", applyFilter);
   }
+
+  wirePinButtons($("#tab-words"), () => {
+    renderWordsTab();
+    renderProgressTab();
+    renderFocusTab();
+  });
 }
 
 function renderListsTab() {
@@ -1758,6 +2034,39 @@ function renderListsTab() {
   });
 }
 
+function renderSyncSection(sync) {
+  if (!sync.code) {
+    return `
+      <p class="muted">Turn this on to check this profile's progress from another device,
+         or to keep two devices in sync. Off by default — nothing leaves this browser until you do.</p>
+      <div class="row">
+        <button class="btn small teal" id="sync-enable">Turn on sync</button>
+      </div>
+      <p class="muted" style="font-size:13px;margin-top:14px">Already have a code from another device?</p>
+      <div class="row">
+        <input type="text" class="text-line" id="sync-link-code" maxlength="6" placeholder="ABC123" style="width:140px;text-transform:uppercase">
+        <button class="btn small ghost" id="sync-link">Link this device</button>
+      </div>`;
+  }
+
+  const last = sync.lastSyncedAt
+    ? new Date(sync.lastSyncedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : "not yet";
+
+  return `
+    <p class="muted">This profile syncs with any device that has this code — keep it private,
+       anyone with it can view or link this profile's progress.</p>
+    <div class="row">
+      <span class="answer" id="sync-code-display">${escapeHtml(sync.code)}</span>
+      <button class="btn small ghost" id="sync-copy">Copy remote link</button>
+    </div>
+    <p class="muted" style="font-size:13px">Last synced: ${last}</p>
+    <div class="row" style="margin-top:8px">
+      <button class="btn small ghost" id="sync-regenerate">Regenerate code</button>
+      <button class="btn small ghost" id="sync-disable">Turn off sync</button>
+    </div>`;
+}
+
 function renderSettingsTab() {
   const s = Store.data.settings;
   const voices = speaker.listVoices();
@@ -1821,6 +2130,9 @@ function renderSettingsTab() {
       <input type="file" id="set-import-file" accept="application/json" style="display:none">
     </div>
 
+    <h3 style="margin-top:24px">Sync across devices</h3>
+    ${renderSyncSection(Store.data.sync)}
+
     <h3 style="margin-top:24px">Danger zone</h3>
     <div class="row">
       <button class="btn small ghost" id="set-reset-stats">Clear stats only</button>
@@ -1873,6 +2185,44 @@ function renderSettingsTab() {
       }
     };
     reader.readAsText(file);
+  });
+
+  bind("#sync-enable", "click", () => {
+    Store.enableSync();
+    renderSettingsTab();
+    toast("Sync turned on.");
+  });
+  bind("#sync-regenerate", "click", () => {
+    if (!confirm("The old code will stop working on any other linked device. Continue?")) return;
+    Store.rotateSyncCode();
+    renderSettingsTab();
+    toast("New code generated.");
+  });
+  bind("#sync-disable", "click", () => {
+    Store.disableSync();
+    renderSettingsTab();
+    toast("Sync turned off.");
+  });
+  bind("#sync-copy", "click", () => {
+    const url = `${location.origin}${location.pathname}?code=${Store.data.sync.code}`;
+    navigator.clipboard.writeText(url).then(
+      () => toast("Remote link copied."),
+      () => toast(url) // clipboard access denied — show it so it can be copied by hand
+    );
+  });
+  bind("#sync-link", "click", async () => {
+    const code = $("#sync-link-code").value.trim().toUpperCase();
+    if (!code) return toast("Type a code first.");
+    if (!confirm(`This replaces ${playerName()}'s local progress with whatever's synced under that code. Continue?`)) return;
+    const ok = await Store.linkWithCode(code);
+    if (ok) {
+      applyProfileSettings();
+      renderParents();
+      refreshHome();
+      toast("Linked! This device now shares that profile's progress.");
+    } else {
+      toast("Couldn't find that code — check it and try again.");
+    }
   });
 
   bind("#set-reset-stats", "click", () => {

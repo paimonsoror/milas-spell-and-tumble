@@ -15,7 +15,21 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 > 2. `HANDOFF-UI.md` — children's-game UI and visual design. **Active.** Ranked
 >    interface problems, the open visual questions, and the hard constraints that
 >    invalidate a normal design toolkit.
-> 3. Curriculum specialist, who will own `js/words.js` and the word content.
+> 3. `HANDOFF-PARENTS.md` — parental controls / child app management. **First
+>    pass done.** Added a Focus tab (review-mix slider, word pinning, a
+>    freeform note), per-word "needed help" tracking, and a read-only
+>    cross-profile peek. Its §8 tells the curriculum specialist exactly what
+>    hook to extend for real pattern/phonics targeting.
+> 4. Curriculum specialist, who will own `js/words.js` and the word content.
+>
+> Running **in parallel** to the content chain above, since it's an
+> infrastructure question, not a gameplay one:
+>
+> - `HANDOFF-ARCHITECTURE.md` — cloud-native architecture review of the
+>   Kubernetes deployment. **Active.** Asks whether "no server" — true since
+>   this project began — still holds now that the app is deployed behind a
+>   real ingress with a real cert, or whether cross-device sync / remote
+>   parent visibility justify adding server-side state for the first time.
 
 ## Running it
 
@@ -168,8 +182,15 @@ for doing the work, not for opening the app.
 **Everyone medals.** Below bronze is a participation ribbon, worth 4 stars. The
 scoring in `judgeScores()` is deliberately generous.
 
-**Word choice is weighted.** `buildQueue()` fills about a third of a routine from
-words she has previously missed, so practice circles back to the hard ones.
+**Word choice is weighted, and a parent can steer it.** `buildQueue()` fills part
+of a routine from words she has previously missed (about a third by default),
+so practice circles back to the hard ones. The actual pool-splitting logic is
+`Store.selectReviewPool()` (`js/store.js`), kept separate from `buildQueue()`
+specifically so it's reachable from `tests/check.js`'s vm context. A grown-up
+can adjust the ratio and pin individual words as "practice more" or "ease off"
+from the dashboard's Focus tab (`js/store.js` `prefs.reviewMix`/`prefs.pinned`);
+easing off a word only lowers how often it's weighted in, it never removes it
+from her curriculum entirely.
 
 **Try before you buy.** Tapping a locked studio item previews it on the figure;
 stars are only spent on the explicit Buy button. The arena figure always shows what

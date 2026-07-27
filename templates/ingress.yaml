@@ -27,9 +27,18 @@ spec:
             pathType: {{ .pathType }}
             backend:
               service:
+                {{- /* each path defaults to the main static site; set
+                       service:/port: on a path entry to route it elsewhere,
+                       e.g. the sync API at /api (see values.yaml). */}}
+                {{- if eq .service "server" }}
+                name: {{ include "milas-spell-and-tumble.fullname" $ }}-server
+                port:
+                  number: {{ .port | default $.Values.server.port }}
+                {{- else }}
                 name: {{ include "milas-spell-and-tumble.fullname" $ }}
                 port:
                   number: {{ $.Values.service.port }}
+                {{- end }}
           {{- end }}
     {{- end }}
 {{- end }}
