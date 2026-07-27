@@ -9,10 +9,12 @@ spec:
   selector:
     matchLabels:
       {{- include "milas-spell-and-tumble.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web
   template:
     metadata:
       labels:
         {{- include "milas-spell-and-tumble.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: web
     spec:
       containers:
         - name: web
