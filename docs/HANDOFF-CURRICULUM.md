@@ -143,20 +143,55 @@ and does **not** build CVC blending or any word-level task. Concretely:
 
 ## 7. Open questions — yours to answer, and to push back on
 
-- **Phonics-pattern grouping vs. pure difficulty grouping** — should lists (or
-  sub-lists within a grade) be organized around a spelling rule (silent-e, vowel
-  teams, -tion/-sion, doubled consonants) the way real spelling curricula usually
-  are, or is difficulty-only grouping fine for how this game is actually used
-  (a parent picking "grade 3" for practice, not working through a syllabus in
-  order)? Your call, the same way every prior specialist in this chain was asked
-  to make and justify one.
-- **The `g1`/explorer seam from §5** — does it need a bridge, and if so what
-  shape? Even a "no, and here's why the gap is fine" is a useful answer to leave
-  for whoever reads this next.
-- **Sentence quality** — the existing sentences were written to be functional
-  (contain the word, sound like a real sentence) rather than pedagogically
-  considered (e.g. never accidentally rhyme with or contain a homophone of the
-  target word in a way that could mislead). Worth auditing if you're touching a
-  list anyway.
-- **Should `bonus` (the gym/cheer list) get the same rigor**, or is it fine to
-  stay a themed grab-bag since it's explicitly cross-grade and opt-in?
+> **Curriculum pass, first round — done.** All four questions below are
+> answered, with the reasoning kept alongside each so the next person doesn't
+> have to reverse-engineer it from a diff.
+
+**Phonics-pattern grouping vs. pure difficulty grouping.** ✅ *Resolved: both,
+but the pattern grouping lives in source structure, not new data.* Each grade
+in `js/words.js` is now organized into named clusters — e.g. `g1` is short
+vowels → blends → digraphs → `-ck`/`-ng`/`-nk` → sight words; `g4` is
+`-tion`/`-sion` → `-able`/`-ible` → `-ous`/`-ious` → `-ment`/`-ness` →
+prefixes → academic vocabulary. That gives every list a real scope-and-sequence
+instead of an alphabetized or arbitrary dump. It stops short of exposing
+patterns as data (a `pattern` field per word, or separate selectable
+sub-lists) for a concrete reason: `buildQueue()`/`shuffle()` (`js/app.js`)
+draw from a whole list at random, so cluster order is invisible in an actual
+session, and the setup screen only lets a parent choose a whole grade, never a
+sub-pattern — there is no existing mechanism a pattern tag would feed today.
+Adding that metadata now would be building for a UI that doesn't exist yet
+(see `HANDOFF-PARENTS.md` §8, which sketches `Store.selectReviewPool()` as
+where it would plug in *if* that dashboard feature gets built later — extend
+the list object then, not the `[word, sentence]` tuple, per §6.3 above).
+
+**The `g1`/explorer seam from §5.** ✅ *Resolved: no bridge, and here's why.*
+The gap the early-learner specialist flagged is between *recognition*
+(matching a letter to a sound) and *recall* (typing a whole word from
+memory) — an interaction-mode gap, not a word-difficulty gap. `g1`'s words
+(`cat`, `bag`, `hop`, `run`, ...) are already about as simple as a
+spelling-recall task can get; a hypothetical `g0` list of even shorter words
+would still demand unaided typing of a complete word, so it wouldn't actually
+close the gap that was identified. Closing it for real means changing the
+explorer track's own top level (e.g. adding a CVC-blending step there), which
+is `js/letters.js`/`HANDOFF-EARLY-LEARNER.md` territory per invariant §6.1,
+not a `js/words.js` change. "Graduating" a profile stays exactly the manual
+`Store.setStage()` toggle it already is — flagging this back up rather than
+building around it.
+
+**Sentence quality.** ✅ *Resolved — audited during the rewrite.* Every
+sentence was rewritten or reviewed while building the new lists specifically
+checking that it doesn't contain a homophone or near-spelling of its own
+target word (e.g. `their`'s sentence says "Their team wore matching bows,"
+never mentioning "there"/"they're"; `new`'s and `knew`'s sentences don't cross
+-contaminate each other). `tests/check.js` still only checks that the exact
+word appears — homophone-safety isn't mechanically checkable, so it's a
+one-time audit, not an enforced guarantee; a future edit to a sentence should
+re-check this by eye.
+
+**Should `bonus` get the same rigor?** ✅ *Resolved: no, left untouched.* It
+stays the themed cross-grade grab-bag it already was — invariant material,
+and the brief's own §4 said to leave its shape and purpose alone without a
+specific reason. A few of its words (`cartwheel`, `kick`, `stretch`) also
+appear in a graded list; `tests/check.js`'s new no-duplicate check deliberately
+exempts `bonus` for exactly this reason, since it's the one list that's
+allowed to overlap.

@@ -21,9 +21,16 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >    cross-profile peek. Its §8 tells the curriculum specialist exactly what
 >    hook to extend for real pattern/phonics targeting.
 > 4. `HANDOFF-CURRICULUM.md` — the curriculum specialist who owns `js/words.js`
->    and the word content. **Ready to start.** Written by the early-learner
->    specialist below as its own handoff, the same way every prior specialist
->    in this chain wrote the next one's brief; not started yet itself.
+>    and the word content. **Done.** All 261 words across `g1`-`g5` and `bonus`
+>    were reorganized into named phonics/morphology clusters (short vowels →
+>    blends/digraphs → silent e/vowel teams → prefixes/suffixes/doubling →
+>    Latin suffixes/roots), sentences were audited against misleading
+>    homophones, and `tests/check.js` now enforces the design (no word repeats
+>    across `g1`-`g5`, no word repeats within a list, average word length
+>    climbs every grade). Nobody is downstream yet — see its own §7 for the
+>    two open questions it resolved (no `g1`/explorer bridge is needed, and
+>    pattern clusters live as source comments, not new per-word metadata) and
+>    why.
 >
 > Running **in parallel** to the content chain above, since it's an
 > infrastructure question, not a gameplay one:
@@ -65,7 +72,7 @@ Web Speech API and flashes the word on screen instead.
 |---|---|
 | `index.html` | All eight screens as `<section class="screen">`, plus the arena scenery SVG |
 | `css/styles.css` | Everything visual. No framework. |
-| `js/words.js` | 252 words across grades 1–5 + a gym/cheer list, each with a sentence |
+| `js/words.js` | 261 words across grades 1–5 + a gym/cheer list, each with a sentence — a designed curriculum organized into phonics/morphology clusters, see `docs/HANDOFF-CURRICULUM.md` |
 | `js/letters.js` | The "explorer" track's content — 26 letters (name + sound clue) — and its pure helpers (`nextLetterLevel`, `chooseOptionCount`, `selectLetterPool`). Separate from `js/words.js` on purpose; see `docs/HANDOFF-EARLY-LEARNER.md`. |
 | `js/avatar.js` | The jointed SVG figure (`Gymnast`), the unlock catalog, pose helpers |
 | `js/skills.js` | Skill keyframe data + the `Animator` that tweens between poses |
@@ -297,6 +304,30 @@ password is the whole interaction. The page is disabled outright
 the Helm values, so it stays off by default rather than accidentally exposed.
 Deleting a profile from the page reuses the existing public
 `DELETE /api/profiles/:code` route rather than a duplicate admin-only one.
+
+**Phonics-pattern grouping lives in source comments, not per-word metadata.**
+`js/words.js` groups each grade's words into named clusters (e.g. g3's
+prefixes → suffixes → doubled consonants → silent letters → soft c/g), but the
+`[word, sentence]` tuple itself never grew a `pattern` field. Two reasons:
+`buildQueue()`/`shuffle()` (`js/app.js`) draw from a whole list at random, so
+cluster order is invisible in an actual session — there is no in-game
+mechanism a pattern tag would currently feed. And the setup screen only lets a
+parent pick a whole grade, never a sub-pattern, so there's no UI to expose one
+either. If a future dashboard feature wants to target a specific pattern
+(`HANDOFF-PARENTS.md` §8 sketches `Store.selectReviewPool()` as the extension
+point), add the metadata then, onto the list object rather than the tuple —
+don't carry it speculatively today.
+
+**There is no `g1`/explorer bridge list, on purpose.** `HANDOFF-EARLY-LEARNER.md`
+flagged a gap between the explorer track's top level (matching a letter to a
+sound) and `g1`'s CVC recall-typing. The gap turned out to be about
+*interaction mode* — tap-to-choose vs. type-and-recall — not word difficulty:
+`g1`'s words are already the simplest a spelling-recall task can meaningfully
+use. A new, even-easier word list would still demand typing a whole word
+unaided, so it wouldn't actually close the gap; closing it means changing the
+explorer track's own interaction, which is `HANDOFF-EARLY-LEARNER.md`'s
+territory, not `js/words.js`'s. "Graduating" a profile stays the manual
+`Store.setStage()` toggle it already is.
 
 ## Testing
 

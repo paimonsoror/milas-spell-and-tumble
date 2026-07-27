@@ -452,22 +452,54 @@ ctx.Store.importJSON(dump);
 ok(ctx.Store.profiles().length === 2, "import restores every player");
 ok(ctx.Store.profiles().some((p) => p.name === "Backup Buddy"), "import restores player names");
 
-/* ---- word content ---- */
-let wordCount = 0, missingWord = [];
+/* ---- word content ----
+   The grades 1-5 curriculum pass (docs/HANDOFF-CURRICULUM.md) organizes each
+   list into deliberate phonics/morphology clusters and relies on difficulty
+   climbing grade over grade, not just word count. These checks encode both
+   guarantees so a future edit can't quietly undo them. */
+let wordCount = 0, missingWord = [], dupesWithinList = [];
+const seenAcrossGrades = new Map(); // word -> first grade key it appeared in
+const crossGradeDupes = [];
+const avgLenByGrade = {};
+
 for (const key of ctx.GRADE_ORDER) {
   const list = ctx.WORD_LISTS[key];
   ok(list && list.words.length >= 30, `${key} has enough words`);
   const seen = new Set();
+  let totalLen = 0;
   for (const [w, s] of list.words) {
     wordCount++;
+    totalLen += w.length;
     ok(/^[a-z]+$/.test(w), `"${w}" in ${key} is a plain lowercase word`);
     ok(typeof s === "string" && s.length > 5, `"${w}" has a sentence`);
     if (!new RegExp(`\\b${w}`, "i").test(s)) missingWord.push(`${key}:${w}`);
-    if (seen.has(w)) console.log(`  note: ${key} repeats "${w}"`);
+    if (seen.has(w)) dupesWithinList.push(`${key}:${w}`);
     seen.add(w);
+
+    // "bonus" is deliberately cross-grade (gym/cheer vocabulary that can
+    // legitimately reappear alongside a grade list) — only g1-g5 need to be
+    // mutually exclusive, so a word's grade placement stays unambiguous.
+    if (key !== "bonus") {
+      if (seenAcrossGrades.has(w) && seenAcrossGrades.get(w) !== key) {
+        crossGradeDupes.push(`"${w}" in both ${seenAcrossGrades.get(w)} and ${key}`);
+      }
+      seenAcrossGrades.set(w, key);
+    }
   }
+  if (key !== "bonus") avgLenByGrade[key] = totalLen / list.words.length;
 }
 ok(missingWord.length === 0, `every sentence contains its word (missing: ${missingWord.join(", ")})`);
+ok(dupesWithinList.length === 0, `no list repeats a word (repeats: ${dupesWithinList.join(", ")})`);
+ok(crossGradeDupes.length === 0, `a word lands in exactly one grade list (conflicts: ${crossGradeDupes.join(", ")})`);
+
+// average word length should climb grade over grade — a cheap, durable proxy
+// for "this is an actual difficulty progression", not just six same-sized bins
+const gradeKeys = ctx.GRADE_ORDER.filter((k) => k !== "bonus");
+for (let i = 1; i < gradeKeys.length; i++) {
+  const prev = gradeKeys[i - 1], cur = gradeKeys[i];
+  ok(avgLenByGrade[cur] > avgLenByGrade[prev],
+    `${cur}'s average word length (${avgLenByGrade[cur].toFixed(1)}) exceeds ${prev}'s (${avgLenByGrade[prev].toFixed(1)})`);
+}
 
 console.log(`\nchecked ${ctx.SKILLS.length} skills, ${wordCount} words across ${ctx.GRADE_ORDER.length} lists`);
 console.log(fails === 0 ? "ALL CHECKS PASSED" : `${fails} FAILURES`);
