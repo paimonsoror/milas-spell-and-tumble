@@ -300,3 +300,5 @@ class Sfx {
     this.crowd(2.2, tier === "gold" ? 1.3 : 1);
   }
 }
+
+export { VOICE_PRESETS, VOICE_PRESET_BY_ID, Speaker, clampRate, clampPitch, Sfx };

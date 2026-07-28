@@ -1,5 +1,14 @@
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM node:22-alpine AS build
+WORKDIR /build
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY build.js ./
+COPY js ./js
+RUN npm run build
 
-COPY --chown=nginx:nginx . /usr/share/nginx/html
+FROM nginxinc/nginx-unprivileged:1.27-alpine
+COPY --chown=nginx:nginx index.html /usr/share/nginx/html/index.html
+COPY --chown=nginx:nginx css /usr/share/nginx/html/css
+COPY --chown=nginx:nginx --from=build /build/dist /usr/share/nginx/html/dist
 
 EXPOSE 8080

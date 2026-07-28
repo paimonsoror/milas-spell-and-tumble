@@ -1,2 +1,4 @@
 _debug/
 .claude/
+node_modules/
+dist/

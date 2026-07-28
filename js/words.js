@@ -347,3 +347,5 @@ const WORD_LISTS = {
 };
 
 const GRADE_ORDER = ["g1", "g2", "g3", "g4", "g5", "bonus"];
+
+export { WORD_LISTS, GRADE_ORDER };

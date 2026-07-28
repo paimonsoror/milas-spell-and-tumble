@@ -6,16 +6,58 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { makeStore } = require("./db");
+const { makeStore, backupFileName, pruneBackups } = require("./db");
 
 const PORT = process.env.PORT || 8081;
 const DB_PATH = process.env.DB_PATH || "./data/sync.db";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // a profile snapshot is a few KB; this is a generous cap against abuse
 
+// Tier 1 backup story (docs/HANDOFF-ARCHITECTURE.md §11): consistent
+// VACUUM INTO snapshots on the same PVC as the live database, with
+// retention pruning. Deliberately not a second container/image — see that
+// doc for why (the CI pipeline's blanket `sed` over every `tag:` key in
+// values.yaml would clobber a second image's tag).
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(path.dirname(DB_PATH), "backups");
+const BACKUP_INTERVAL_MS = Number(process.env.BACKUP_INTERVAL_MS) || 24 * 60 * 60 * 1000;
+const BACKUP_RETENTION = Number(process.env.BACKUP_RETENTION) || 7;
+
 const store = makeStore(DB_PATH);
 const bootTime = Date.now();
 const ADMIN_HTML = fs.readFileSync(path.join(__dirname, "admin.html"));
+
+const backupState = { lastBackupAt: null, lastBackupError: null };
+
+function runBackup() {
+  try {
+    store.backup(path.join(BACKUP_DIR, backupFileName()));
+    pruneBackups(BACKUP_DIR, BACKUP_RETENTION);
+    backupState.lastBackupAt = Date.now();
+    backupState.lastBackupError = null;
+  } catch (err) {
+    console.error("backup failed:", err);
+    backupState.lastBackupError = err.message;
+  }
+}
+
+runBackup(); // don't make a freshly deployed server wait a full interval for its first snapshot
+const backupTimer = setInterval(runBackup, BACKUP_INTERVAL_MS);
+if (backupTimer.unref) backupTimer.unref(); // same reasoning as store.js's _scheduleSync(): never hold the process open on its own
+
+function backupStats() {
+  let count = 0;
+  let totalBytes = 0;
+  try {
+    for (const f of fs.readdirSync(BACKUP_DIR)) {
+      if (!f.startsWith("sync-") || !f.endsWith(".db")) continue;
+      count++;
+      totalBytes += fs.statSync(path.join(BACKUP_DIR, f)).size;
+    }
+  } catch {
+    // backups dir doesn't exist yet — report zero rather than failing the endpoint
+  }
+  return { ...backupState, count, totalBytes };
+}
 
 const CODE_RE = /^[A-Z0-9]{4,12}$/;
 
@@ -115,6 +157,7 @@ function buildOverview() {
       dbSizeBytes,
       rowCount: rows.length
     },
+    backups: backupStats(),
     profiles
   };
 }
@@ -235,8 +278,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => console.log(`sync server listening on :${PORT}, db at ${DB_PATH}`));
 
 process.on("SIGTERM", () => {
+  clearInterval(backupTimer);
   store.close();
   server.close(() => process.exit(0));
 });
 
-module.exports = { server };
+module.exports = { server, runBackup, backupStats };

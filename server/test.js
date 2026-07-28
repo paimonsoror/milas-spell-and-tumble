@@ -8,7 +8,7 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 
-const { makeStore } = require("./db");
+const { makeStore, backupFileName, pruneBackups } = require("./db");
 
 let failures = 0;
 function ok(cond, msg) {
@@ -43,6 +43,51 @@ function ok(cond, msg) {
   store.delete("ABC123");
   ok(store.get("ABC123") === null, "a deleted code is gone");
   store.close();
+}
+
+/* ---- db.js: backup() / pruneBackups() (docs/HANDOFF-ARCHITECTURE.md §11) ---- */
+{
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mila-backup-")), "test.db");
+  const store = makeStore(dbPath);
+  store.reconcile("BKUP01", '{"stars":7}', 1000);
+
+  const backupDir = path.join(path.dirname(dbPath), "backups");
+  const destPath = path.join(backupDir, backupFileName(new Date(2026, 0, 1)));
+  store.backup(destPath);
+  ok(fs.existsSync(destPath), "backup() creates a file at the given path");
+
+  const restored = makeStore(destPath);
+  ok(restored.get("BKUP01").snapshot === '{"stars":7}', "the backup is a fully independent, restorable database");
+  restored.close();
+
+  // A later write to the live db must not appear in the already-taken snapshot.
+  store.reconcile("BKUP01", '{"stars":99}', 2000);
+  const restoredAgain = makeStore(destPath);
+  ok(restoredAgain.get("BKUP01").snapshot === '{"stars":7}', "a backup is a point-in-time snapshot, not a live view");
+  restoredAgain.close();
+  store.close();
+
+  // Retention pruning: 10 fake backups, keep 3, expect exactly the 3 newest to survive.
+  const pruneDir = fs.mkdtempSync(path.join(os.tmpdir(), "mila-prune-"));
+  const names = [];
+  for (let i = 0; i < 10; i++) {
+    const name = backupFileName(new Date(2026, 0, 1 + i));
+    fs.writeFileSync(path.join(pruneDir, name), "x");
+    names.push(name);
+  }
+  fs.writeFileSync(path.join(pruneDir, "not-a-backup.txt"), "x"); // must survive untouched
+  const removed = pruneBackups(pruneDir, 3);
+  const remaining = fs.readdirSync(pruneDir).sort();
+  ok(removed.length === 7, "pruneBackups() removes exactly the excess count");
+  ok(
+    remaining.filter((f) => f.startsWith("sync-")).length === 3,
+    "pruneBackups() leaves exactly `keep` backup files"
+  );
+  ok(
+    JSON.stringify(remaining.filter((f) => f.startsWith("sync-"))) === JSON.stringify(names.slice(-3)),
+    "pruneBackups() keeps the newest ones, not an arbitrary subset"
+  );
+  ok(remaining.includes("not-a-backup.txt"), "pruneBackups() leaves non-backup files alone");
 }
 
 /* ---- index.js: the actual HTTP routes ---- */
@@ -126,6 +171,8 @@ async function httpTests() {
   ok(row.stars === 42 && row.dayStreak === 3, "overview reflects the profile's stars and streak");
   ok(row.accuracy === 0.8, "overview computes accuracy from stats.attempts/correct");
   ok(row.wordsTracked === 2, "overview counts tracked words");
+  ok(overview.body.backups && overview.body.backups.count >= 1, "overview reports at least the startup backup index.js takes on load");
+  ok(overview.body.backups.lastBackupAt !== null, "overview reports when the last backup ran");
 
   const detail = await req("GET", "/api/admin/profiles/ADMIN1", null, cookie);
   ok(detail.status === 200 && detail.body.profile.name === "Tester", "admin profile detail returns the parsed snapshot");

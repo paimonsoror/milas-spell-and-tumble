@@ -6,6 +6,11 @@
    so every caller can keep saying Store.data.stars without caring about
    profiles. `Store.file` is the thing that actually gets written to disk. */
 
+import { CATALOG, DEFAULT_LOOK } from "./avatar.js";
+import { LETTERS, LETTER_LEVELS, nextLetterLevel, selectLetterPool } from "./letters.js";
+import { selectPronounPool, selectSoundPool } from "./language.js";
+import { WORD_LISTS } from "./words.js";
+
 const SAVE_KEY = "mila-cartwheel-save-v1";
 const SAVE_VERSION = 2;
 
@@ -82,7 +87,12 @@ function blankProfile(name) {
     // avatar follow her to any device that has the code. localOnly is the
     // deliberate opt-out a grown-up flips in Settings — while it's true,
     // load()/createProfile() leave code alone instead of re-provisioning one.
-    sync: { code: null, lastSyncedAt: null, localOnly: false },
+    // `pending`/`lastError` make push failures visible instead of silently
+    // dropped (see syncOnBoot() below) — `pending` true means the last
+    // attempted push never got a confirmed response, so it's retried on the
+    // next boot instead of being lost; `lastError` is display-only, read by
+    // the Grown-Ups dashboard's Settings tab.
+    sync: { code: null, lastSyncedAt: null, localOnly: false, pending: false, lastError: null },
     // "speller" is the original game this whole file used to be exclusively
     // about; "explorer" is the pre-literacy letters track for a younger
     // sibling (see HANDOFF-EARLY-LEARNER.md). This is a grown-up's explicit,
@@ -712,24 +722,95 @@ const Store = {
      reachable. Takes an explicit profile, defaulting to the active one, so
      _autoProvisionSync() can drive this for a profile that isn't active —
      e.g. provisioning every profile at load(), not just whichever one is
-     open on this device. */
+     open on this device.
+
+     `pending` is set in memory immediately, but deliberately only persisted
+     to disk once the round trip settles (success or failure) — load() calls
+     this fire-and-forget for every profile via _autoProvisionSync(), and
+     load() must stay synchronously side-effect-free (see its own comment)
+     or merely opening the page could write a save file on its own. Since
+     fetch() is always at least one tick away from settling, this doesn't
+     lose the property that matters: a push that actually *fails* leaves
+     `pending: true` on disk, so syncOnBoot() retries it next launch instead
+     of silently losing it. `lastError` is display-only, surfaced in the
+     Grown-Ups dashboard. */
   async reconcileSync(profile) {
     const p = profile || this.data;
     const code = p.sync.code;
     if (!code) return;
+    p.sync.pending = true;
     try {
       const res = await fetch(`/api/profiles/${code}/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshot: JSON.stringify(p), updatedAt: Date.now() })
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        p.sync.lastError = `sync failed (${res.status})`;
+        this._saveLocalOnly();
+        return;
+      }
       const result = await res.json();
       if (result.pulled) this._adoptSnapshot(result.snapshot, p);
+      p.sync.pending = false;
+      p.sync.lastError = null;
       p.sync.lastSyncedAt = Date.now();
       this._saveLocalOnly();
+    } catch (e) {
+      // offline, or the sync server isn't there — pending stays true, so
+      // this is retried next trigger or (if the app closes first) next boot
+      p.sync.lastError = (e && e.message) || "network error";
+      this._saveLocalOnly();
+    }
+  },
+
+  /* Resolves to the settled value of `promise`, or `null` if `ms` elapses
+     first (on timeout, or on any rejection). Never throws. Used so a slow
+     or unreachable server can't hold up boot past a bounded wait — the
+     promise itself is left to settle in the background either way. */
+  _raceTimeout(promise, ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), ms);
+      promise.then(
+        (v) => { clearTimeout(timer); resolve(v); },
+        () => { clearTimeout(timer); resolve(null); }
+      );
+    });
+  },
+
+  /* The authority flip (docs/HANDOFF-ARCHITECTURE.md §11): called once at
+     boot, right after load() and before the app renders. Retries any push
+     that never confirmed last session, then pulls the server's copy within
+     a bounded timeout and adopts it if newer. localStorage is the fallback
+     used only when the server can't be reached in time — not, as before,
+     the thing trusted by default. Resolves either way; a slow or offline
+     server just means the existing local copy stands, which is exactly the
+     "cache" behavior this flip is about.
+
+     Both steps go through _raceTimeout, not just the pull — reconcileSync()
+     has no bounded wait of its own, so an unreachable server during the
+     retry step would otherwise hang boot indefinitely, defeating the entire
+     point of a bounded timeout here. The retry keeps running in the
+     background even if it's timed out on; nothing here depends on it
+     finishing before the pull check runs. */
+  async syncOnBoot(profile, timeoutMs) {
+    const p = profile || this.data;
+    if (!p || !p.sync.code || p.sync.localOnly) return;
+    const ms = timeoutMs || 1500;
+
+    if (p.sync.pending) await this._raceTimeout(this.reconcileSync(p), ms);
+
+    const res = await this._raceTimeout(fetch(`/api/profiles/${p.sync.code}`), ms);
+    if (!res || !res.ok) return;
+    try {
+      const { snapshot, updatedAt } = await res.json();
+      if (updatedAt > (p.sync.lastSyncedAt || 0)) {
+        this._adoptSnapshot(snapshot, p);
+        p.sync.lastSyncedAt = updatedAt;
+        this._saveLocalOnly();
+      }
     } catch {
-      // offline, or the sync server isn't there — fine, this is retried next trigger
+      // malformed response — treat like unreachable, local copy stands
     }
   }
 };
@@ -759,3 +840,5 @@ function parseWordList(text) {
     })
     .filter(([w]) => w.length > 0);
 }
+
+export { SAVE_KEY, SAVE_VERSION, freebies, newId, dayKey, daysBetween, blankProfile, blankFile, migrate, Store, deepMerge, parseWordList };

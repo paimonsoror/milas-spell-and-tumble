@@ -2,7 +2,7 @@
    Edge can screenshot real game states. */
 const fs = require("fs");
 const root = require("path").join(__dirname, "..") + "/";
-const html = fs.readFileSync(root + "index.html", "utf8").replace(/(href|src)="(css|js)\//g, '$1="../$2/');
+const html = fs.readFileSync(root + "index.html", "utf8").replace(/(href|src)="(css|js|dist)\//g, '$1="../$2/');
 
 const preamble = `
   window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @line '+l;};
@@ -11,12 +11,25 @@ const preamble = `
   const _st = document.createElement('style');
   _st.textContent = '*,*::before,*::after{animation:none !important;transition:none !important}';
   document.head.appendChild(_st);
+  // app.js is bundled as an ES module now, so its top-level bindings aren't
+  // page globals — window.__app is the explicit debug surface it exposes
+  // for exactly this driver script (see js/app.js). Most of these are
+  // stable for the page's whole lifetime (Store, arena, functions) and are
+  // safe to destructure once here. session/letterSession are NOT — they get
+  // reassigned wholesale by startSession()/startLetterRound(), so they stay
+  // window.__app.session / window.__app.letterSession everywhere below
+  // instead of being captured as a stale snapshot.
+  const { Store, arena, sfx, speaker, SKILL_BY_ID, poseFrom, submitAnswer,
+    showScreen, refreshHome, startSession, advance, startLetterRound,
+    currentLetterItem, finishLetterRound, renderParents, announceSkill,
+    setParentsUnlocked } = window.__app;
   Store.reset();                       // driver pages share one file:// origin
   arena.gymnast.setLook(Store.data.look);
   sfx.enabled = false; speaker.enabled = false; speaker.supported = false;
   Store.data.settings.autoSpeak = false;
   const answer = (right) => {
-    const w = session.queue[session.index % session.queue.length][0];
+    const s = window.__app.session;
+    const w = s.queue[s.index % s.queue.length][0];
     document.querySelector('#spell-input').value = right ? w : w.slice(0, 2) + 'x' + w.slice(3);
     submitAnswer();
   };
@@ -60,7 +73,7 @@ const drivers = {
   results: `
     startSession({ mode:'competition', sport:'both', list:'g3', length:6 });
     setTimeout(() => {
-      for (let n = 0; n < 6 && session; n++) { answer(n !== 2); advance(); }
+      for (let n = 0; n < 6 && window.__app.session; n++) { answer(n !== 2); advance(); }
     }, 800);`,
 
   voice: `showScreen('voice');`,
@@ -116,10 +129,11 @@ const drivers = {
     Store.setStage('explorer');
     startLetterRound();
     setTimeout(() => {
-      letterSession.results = letterSession.queue.map((id) => ({ id, firstTry: true }));
-      letterSession.correct = letterSession.queue.length;
-      letterSession.bestStreak = letterSession.queue.length;
-      letterSession.stars = letterSession.queue.length;
+      const ls = window.__app.letterSession;
+      ls.results = ls.queue.map((id) => ({ id, firstTry: true }));
+      ls.correct = ls.queue.length;
+      ls.bestStreak = ls.queue.length;
+      ls.stars = ls.queue.length;
       finishLetterRound();
     }, 900);`,
 
@@ -128,12 +142,12 @@ const drivers = {
     ['A','B','C','D','E'].forEach((id) => {
       for (let i = 0; i < 5; i++) Store.recordLetterAttempt(id, 'upper', i % 4 !== 0);
     });
-    parentsUnlocked = true;
+    setParentsUnlocked(true);
     showScreen('parents'); renderParents();`,
 
   "letters-parents-settings": `
     Store.setStage('explorer');
-    parentsUnlocked = true;
+    setParentsUnlocked(true);
     showScreen('parents'); renderParents();
     document.querySelector('.tab[data-tab="settings"]').click();`,
 
@@ -149,7 +163,7 @@ const drivers = {
       ms: 240000, score: i % 2 ? 7 + (i % 4) * 0.6 : 0,
       medal: i % 2 ? ['bronze','silver','gold','ribbon'][i % 4] : null
     });
-    parentsUnlocked = true;
+    setParentsUnlocked(true);
     showScreen('parents'); renderParents();`
 };
 

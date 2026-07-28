@@ -1,2 +1,11 @@
 .git
 _debug
+node_modules
+dist
+docs
+tests
+server
+templates
+*.md
+Chart.yaml
+values.yaml

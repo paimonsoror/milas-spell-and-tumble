@@ -10,6 +10,8 @@
      py    negative = airborne
      sq    landing squash, 0..1 */
 
+import { NEUTRAL_POSE, poseFrom } from "./avatar.js";
+
 const EASINGS = {
   linear: (t) => t,
   easeIn: (t) => t * t,
@@ -686,3 +688,5 @@ class Animator {
     setTimeout(() => el.remove(), 800);
   }
 }
+
+export { EASINGS, SKILLS, IDLE, SKILL_BY_ID, skillsForSport, chooseSkill, POSE_KEYS, resolveFrames, lerpPose, Animator };

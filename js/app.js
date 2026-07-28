@@ -1,13 +1,24 @@
 /* Screens, game loop, avatar studio, and the grown-ups dashboard. */
 
+import { WORD_LISTS, GRADE_ORDER } from "./words.js";
+import { LETTERS, LETTER_BY_ID, chooseOptionCount, shuffleLetters } from "./letters.js";
+import {
+  PRONOUN_BY_ID, spokenPronounPrompt, SOUND_PAIR_BY_ID, resolveSoundItem,
+  mouthShapeIcon, shuffleLanguageItems
+} from "./language.js";
+import { CATALOG, SKIN_TONES, poseFrom, buildThumbnail, Gymnast } from "./avatar.js";
+import { SKILLS, SKILL_BY_ID, skillsForSport, chooseSkill, Animator } from "./skills.js";
+import { VOICE_PRESETS, VOICE_PRESET_BY_ID, Speaker, Sfx } from "./audio.js";
+import { Store, dayKey, parseWordList } from "./store.js";
+
 /* Bump this by hand whenever a meaningfully-shipped change goes out. There's
-   no build step and no git-derived build number here on purpose (same
-   philosophy as everywhere else in this repo), so this is the one manual
-   signal for "which copy of the app is this" when opening the page on a
-   given device — shown in the corner badge (index.html #app-version) and in
-   the Grown-Ups dashboard's Settings tab. Not the same thing as
-   SAVE_VERSION in store.js, which versions the save-file *shape*, not the
-   code. */
+   still no git-derived build number here — this repo does now have a build
+   step (esbuild bundles this into dist/game.js), but there's still no CI
+   concept of "the version," so this stays the one manual signal for "which
+   copy of the app is this" when opening the page on a given device — shown
+   in the corner badge (index.html #app-version) and in the Grown-Ups
+   dashboard's Settings tab. Not the same thing as SAVE_VERSION in store.js,
+   which versions the save-file *shape*, not the code. */
 const APP_VERSION = "1.0.0";
 
 const $ = (sel, root) => (root || document).querySelector(sel);
@@ -32,17 +43,48 @@ let parentsUnlocked = false;
 // never able to write anything back to it
 let remoteReadOnly = false;
 
+/* Explicit, minimal debug surface for tests/screenshots.js, which drives the
+   booted app from injected <script> tags in a generated copy of index.html.
+   Now that app.js is bundled as an ES module rather than a classic script,
+   its top-level bindings are no longer implicit page globals — this is the
+   deliberate replacement, not incidental leakage. `arena`/`session`/
+   `letterSession`/`languageSession` are exposed as getters (not plain
+   values) because each is reassigned during play (e.g. startSession()
+   replaces `session` wholesale), and a snapshot object literal would go
+   stale the moment that happens; everything else here is a stable function
+   or object reference for the lifetime of the page. */
+window.__app = {
+  Store, SKILL_BY_ID, poseFrom,
+  submitAnswer, showScreen, refreshHome, startSession, advance,
+  startLetterRound, currentLetterItem, finishLetterRound, renderParents,
+  announceSkill,
+  setParentsUnlocked: (v) => { parentsUnlocked = v; },
+  get arena() { return arena; },
+  get studio() { return studio; },
+  get session() { return session; },
+  get letterSession() { return letterSession; },
+  get languageSession() { return languageSession; },
+  get sfx() { return sfx; },
+  get speaker() { return speaker; }
+};
+
 /* ============================================================
    boot
    ============================================================ */
 
-function init() {
+async function init() {
   $("#app-version").textContent = "v" + APP_VERSION;
 
   const remoteCode = new URLSearchParams(location.search).get("code");
   if (remoteCode) return initRemoteView(remoteCode);
 
   Store.load();
+  // The authority flip (docs/HANDOFF-ARCHITECTURE.md §11): check the server
+  // before rendering, not just opportunistically after. Bounded by its own
+  // internal timeout, so a slow or unreachable server delays boot briefly
+  // rather than indefinitely — localStorage (already loaded above) is what
+  // renders if this doesn't resolve in time.
+  await Store.syncOnBoot();
   applyProfileSettings();
 
   buildCrowd();
@@ -2751,6 +2793,16 @@ function renderSyncSection(sync) {
     ? new Date(sync.lastSyncedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     : "not yet";
 
+  // Push failures used to be silent (see docs/HANDOFF-ARCHITECTURE.md §11) —
+  // `pending`/`lastError` make them visible here instead. `pending` covers
+  // both "request in flight" and "queued for retry after a failure," which
+  // is why it takes priority over showing the stale error underneath it.
+  const status = sync.pending
+    ? `<p class="muted" style="font-size:13px">Syncing…</p>`
+    : sync.lastError
+    ? `<p class="muted" style="font-size:13px">Couldn't reach the sync server last time (${escapeHtml(sync.lastError)}) — it'll retry automatically.</p>`
+    : "";
+
   return `
     <p class="muted">Every profile syncs automatically — ${escapeHtml(playerName())}'s stars, avatar and
        progress follow her to any device that has this code. Keep it private: anyone with it can view
@@ -2760,6 +2812,7 @@ function renderSyncSection(sync) {
       <button class="btn small ghost" id="sync-copy">Copy remote link</button>
     </div>
     <p class="muted" style="font-size:13px">Last synced: ${last}</p>
+    ${status}
     <p class="muted" style="font-size:13px;margin-top:14px">On a new device? Enter this code there under "Link this device."</p>
     <div class="row" style="margin-top:8px">
       <button class="btn small ghost" id="sync-regenerate">Regenerate code</button>

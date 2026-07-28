@@ -60,10 +60,44 @@ function makeStore(dbPath) {
       return db.prepare("SELECT code, snapshot, updated_at FROM profiles ORDER BY updated_at DESC").all();
     },
 
+    /* A consistent, defragmented snapshot of the live database — SQLite's
+       own built-in mechanism for this, so it needs no WAL mode and no
+       external tool, and is safe to run while the server keeps handling
+       requests. Tier 1 of the backup story in docs/HANDOFF-ARCHITECTURE.md
+       §11: protects against in-app mistakes (an accidental/malicious hit to
+       the unauthenticated DELETE /api/profiles/:code route, a bad future
+       migration), not node/disk loss, since the destination is meant to be
+       the same PVC the live database is on. */
+    backup(destPath) {
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      db.prepare("VACUUM INTO ?").run(destPath);
+    },
+
     close() {
       db.close();
     }
   };
 }
 
-module.exports = { makeStore };
+/* ISO timestamps with `:`/`.` swapped for `-` sort chronologically as plain
+   strings and are safe filenames on every OS the game or its CI ever runs on. */
+function backupFileName(date) {
+  return `sync-${(date || new Date()).toISOString().replace(/[:.]/g, "-")}.db`;
+}
+
+/* Deletes the oldest backup files in `dir` beyond the newest `keep`. A pure
+   filesystem operation kept separate from `makeStore()` so it's reachable
+   from server/test.js without a live DatabaseSync. */
+function pruneBackups(dir, keep) {
+  if (!fs.existsSync(dir)) return [];
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.startsWith("sync-") && f.endsWith(".db"))
+    .sort();
+  const excess = Math.max(0, files.length - keep);
+  const removed = files.slice(0, excess);
+  for (const f of removed) fs.unlinkSync(path.join(dir, f));
+  return removed;
+}
+
+module.exports = { makeStore, backupFileName, pruneBackups };

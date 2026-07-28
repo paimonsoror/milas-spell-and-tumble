@@ -1,6 +1,6 @@
-const fs = require("fs");
 const vm = require("vm");
-const path = require("path").join(__dirname, "..", "js") + "/";
+const esbuild = require("esbuild");
+const repoRoot = require("path").join(__dirname, "..") + "/";
 
 // top-level `const`/`class` in a vm context stay lexical, so run the test body
 // inside the very same script rather than reaching in from outside
@@ -22,19 +22,28 @@ const ctx = vm.createContext({
   // reconcileSync()'s own try/catch must swallow without throwing
   fetch: () => Promise.reject(new Error("no network in tests"))
 });
-const src =
-  ["words.js", "letters.js", "language.js", "avatar.js", "skills.js", "store.js"].map((f) => fs.readFileSync(path + f, "utf8")).join("\n") +
-  "\n;globalThis.__done = (" + tests.toString() + ")();";
+
+// js/*.js are real ES modules now (see docs/HANDOFF-ARCHITECTURE.md's build-step
+// addendum) — `export`/`import` aren't valid in a classic vm.runInContext
+// script, so the old "concatenate 6 files as one classic script" trick no
+// longer works. Bundle them through the same esbuild used for the real app,
+// via a barrel entry (tests/testEntry.js), into one IIFE that exposes every
+// export as properties of a `TestCore` global instead.
+const bundled = esbuild.buildSync({
+  entryPoints: [repoRoot + "tests/testEntry.js"],
+  bundle: true,
+  format: "iife",
+  globalName: "TestCore",
+  write: false,
+  target: "es2020"
+}).outputFiles[0].text;
+
+const src = bundled + "\n;globalThis.__done = (" + tests.toString() + ")();";
 
 async function tests() {
-const ctx = {
-  SKILLS, IDLE, EASINGS, NEUTRAL_POSE, poseFrom, skillsForSport, chooseSkill,
-  CATALOG, SKIN_TONES, DEFAULT_LOOK, Store, parseWordList, WORD_LISTS, GRADE_ORDER,
-  Animator, SKILL_BY_ID, dayKey, daysBetween,
-  LETTERS, LETTER_BY_ID, LETTER_LEVELS, nextLetterLevel, chooseOptionCount, selectLetterPool,
-  PRONOUN_ITEMS, PRONOUN_BY_ID, spokenPronounPrompt, selectPronounPool,
-  SOUND_PAIRS, SOUND_PAIR_BY_ID, resolveSoundItem, selectSoundPool, mouthShapeIcon
-};
+// TestCore already carries exactly the exports the 6 bundled files have
+// (a superset of what's used below is harmless) — no need to re-list them.
+const ctx = TestCore;
 
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { console.log("FAIL: " + msg); fails++; } };
@@ -384,6 +393,53 @@ ok(Object.keys(ctx.Store.data.languagePlay.sound.pairs).length === 0, "an old sa
   ok(codes.every((c) => /^[A-Z0-9]{6}$/.test(c)), "every profile has a code after load(), not just the active one");
   ok(new Set(codes).size === codes.length, "auto-provisioned codes don't collide across profiles");
   ctx.Store.deleteProfile(fresh.id);
+}
+
+/* ---- syncOnBoot: server-authoritative on boot (docs/HANDOFF-ARCHITECTURE.md §11) ---- */
+{
+  const realFetch = fetch;
+  const code = ctx.Store.data.sync.code;
+  const idBefore = ctx.Store.data.id;
+  ok(/^[A-Z0-9]{6}$/.test(code), "setup: the active profile already has a code from earlier tests");
+
+  // 1. the server has a newer snapshot than local -> syncOnBoot() adopts it before rendering
+  ctx.Store.data.sync.lastSyncedAt = 1;
+  // the "server" copy has a different id, the way a real cross-device snapshot
+  // would — proves _adoptSnapshot()'s id-preservation actually does something here
+  const serverSnapshot = JSON.stringify(Object.assign({}, ctx.Store.data, { id: "server-side-id", stars: 999 }));
+  fetch = (url) =>
+    String(url) === `/api/profiles/${code}`
+      ? Promise.resolve({ ok: true, json: () => Promise.resolve({ snapshot: serverSnapshot, updatedAt: 999999999999 }) })
+      : Promise.reject(new Error("unexpected fetch URL in test: " + url));
+  await ctx.Store.syncOnBoot();
+  ok(ctx.Store.data.stars === 999, "syncOnBoot() adopts a newer server snapshot before rendering");
+  ok(ctx.Store.data.id === idBefore, "adopting a snapshot never overwrites local identity, only gameplay content");
+  fetch = realFetch;
+
+  // 2. the server never responds -> the bounded timeout falls back to local instead of hanging,
+  // even when a leftover pending retry (from earlier tests) also never resolves
+  fetch = () => new Promise(() => {}); // never settles
+  const before = ctx.Store.data.stars;
+  const start = Date.now();
+  await ctx.Store.syncOnBoot(ctx.Store.data, 30); // tiny timeout so this test stays fast
+  const elapsed = Date.now() - start;
+  ok(ctx.Store.data.stars === before, "syncOnBoot() leaves local data alone when the server never responds");
+  ok(elapsed < 1000, `syncOnBoot() respects its timeout instead of hanging (took ${elapsed}ms)`);
+  fetch = realFetch;
+
+  // 3. pending/lastError track a failed push, then clear once a push succeeds
+  ctx.Store.data.sync.pending = false;
+  ctx.Store.data.sync.lastError = null;
+  fetch = () => Promise.reject(new Error("simulated network failure"));
+  await ctx.Store.reconcileSync();
+  ok(ctx.Store.data.sync.pending === true, "a failed push leaves pending true, to be retried");
+  ok(ctx.Store.data.sync.lastError === "simulated network failure", "a failed push records the error message");
+
+  fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ pulled: false }) });
+  await ctx.Store.reconcileSync();
+  ok(ctx.Store.data.sync.pending === false, "a subsequent successful push clears pending");
+  ok(ctx.Store.data.sync.lastError === null, "a subsequent successful push clears lastError");
+  fetch = realFetch;
 }
 
 /* ---- selectReviewPool ---- */

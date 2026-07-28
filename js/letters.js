@@ -128,3 +128,5 @@ function selectLetterPool(letters, progress, count) {
   }
   return picked;
 }
+
+export { LETTERS, LETTER_BY_ID, LETTER_LEVELS, levelMastered, nextLetterLevel, chooseOptionCount, shuffleLetters, selectLetterPool };

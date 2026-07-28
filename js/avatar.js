@@ -935,3 +935,9 @@ class Gymnast {
     this.setPose(this.pose);
   }
 }
+
+export {
+  RIG, SKIN_TONES, CATALOG, DEFAULT_LOOK, NEUTRAL_POSE, poseFrom, HEAD_Y,
+  hairMarkup, bowMarkup, TRAIL_SHAPES, trailMarkup, gradientDefs,
+  prefersReducedMotion, thumbSeq, buildThumbnail, avatarSeq, Gymnast
+};

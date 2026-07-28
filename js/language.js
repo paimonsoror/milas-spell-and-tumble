@@ -152,3 +152,9 @@ function selectPronounPool(progress, count) {
 function selectSoundPool(progress, count) {
   return weightedPoolPick(SOUND_PAIRS.map((p) => p.id), progress, count);
 }
+
+export {
+  PRONOUN_ITEMS, PRONOUN_BY_ID, spokenPronounPrompt,
+  SOUND_PAIRS, SOUND_PAIR_BY_ID, resolveSoundItem, mouthShapeIcon,
+  shuffleLanguageItems, weightedPoolPick, selectPronounPool, selectSoundPool
+};

@@ -252,3 +252,82 @@ system, so a device that has never seen a given profile still needs that
 profile's pairing code once (`Store.linkWithCode()`) to link to it —
 "automatic" describes what happens after that one pairing step, not
 discovery across an arbitrary unpaired device.
+
+## 11. Second pass — the project owner retires §8.1
+
+Everything above this section was written when §8.1 ("the offline,
+zero-server, double-clickable-folder mode must keep working") was treated as
+non-negotiable. It was the single biggest constraint shaping every decision
+in this doc — why sync stayed fire-and-forget, why `localStorage` stayed
+authoritative, why there was no build step. The project owner revisited that
+specifically, on the grounds that the game is now deployed to a real
+Kubernetes platform and doesn't need to also work as a folder someone
+double-clicks with zero setup. That's a deliberate reversal of §8.1, not an
+oversight — everything else in §8 (no child-identifying data leaving the
+household's infra, `node tests/check.js` staying green, no multi-tenant
+assumptions) is unaffected and still holds.
+
+Three things shipped once that constraint was gone, in order of increasing
+risk:
+
+**A real build step + ES modules.** The reason `js/*.js` used classic
+`<script>` tags sharing one global scope instead of `import`/`export` was
+specifically that browsers refuse ES modules over `file://` — that's the
+exact mechanism §8.1 required. With it gone, `js/*.js` became real ES
+modules with an explicit dependency graph (see the "Layout" section of
+`CLAUDE.md`), bundled by `build.js` (esbuild) into `dist/game.js`, which
+`index.html` loads with one plain `<script>` tag. `tests/check.js`'s
+classic-script-concatenation trick for its 6 non-DOM files broke under real
+modules and was replaced with a small esbuild-bundled barrel entry
+(`tests/testEntry.js`); `tests/screenshots.js` similarly moved from reaching
+into implicit page globals to reading an explicit `window.__app` debug
+surface `app.js` now exposes on purpose. TypeScript was added as a
+type-*checking* pass only (JSDoc + `tsc --noEmit`, non-blocking in CI for
+now) — not a `.ts` rewrite, which would have been disproportionate risk for
+6,300 lines of tightly-coupled existing code in one pass. The root
+`Dockerfile` became multi-stage (build in `node:22-alpine`, serve from
+`nginx-unprivileged`), and `.github/workflows/build.yml` gained its first
+test coverage ever (`npm test` now gates both image pushes; it previously
+had none).
+
+**Server-authoritative sync**, narrowly scoped: only *when* the server is
+trusted over the local copy changed, not the whole-snapshot/timestamp-wins
+model itself (still correct at this scale — see §7's own reasoning, which
+doesn't change here). `Store.syncOnBoot()` — testable the same way
+`Store.selectReviewPool()` was pulled out for testability — pulls from the
+server on boot with a bounded timeout before the app renders, adopting the
+server's copy if it's newer; `localStorage` is now explicitly the fallback
+used when the authoritative source can't be reached in time, not the thing
+trusted by default. `app.js`'s `init()` became `async` to `await` this — the
+only boot-order change. Two new profile fields, `sync.pending` and
+`sync.lastError`, make push failures visible in the Grown-Ups dashboard
+instead of silently dropped, and a push that never confirmed retries on the
+next boot instead of being lost. No server route or schema changes were
+needed — this is entirely a client-side behavior change in `store.js` plus
+one call site in `app.js`. `sync.localOnly` stays supported as a degraded
+mode (a flaky home network is still real), just reframed from "the
+sanctioned alternative to a server that might not exist" to "an explicit
+opt-out."
+
+**A real backup story for the SQLite database**, Tier 1 only. The database
+had zero backup mechanism before this — a single file on a single-replica
+PVC. `server/db.js` gained a `backup()` function using SQLite's own
+`VACUUM INTO`, producing consistent snapshots with no WAL mode and no
+external tools needed; `server/index.js` runs it on an interval with
+retention pruning, writing to a `backups/` subdirectory on the *existing*
+PVC — deliberately not a new container image, since `.github/workflows/build.yml`'s
+CI does a blanket `sed` rewrite of every `tag:` key in `values.yaml` to the
+app's own git sha, which would silently clobber a second image's tag if one
+were introduced. This protects against in-app mistakes (the unauthenticated
+`DELETE /api/profiles/:code` route, a bad future migration) but explicitly
+**not** node/disk loss, since it's the same physical volume. Off-node
+shipping (litestream + object storage, restic, rclone) is flagged as
+follow-up work, not solved here — confirmed with the project owner that no
+S3/MinIO/NFS exists yet in this cluster to ship to. When that changes, the
+CI `sed` regex needs revisiting at the same time, for the reason above.
+
+**Deliberately not done in this pass:** Postgres, Redis, or any other
+shared datastore — no shared Postgres exists in this cluster, and the scale
+calibration in §1 is completely unchanged by any of this. Retiring §8.1 was
+about where the game runs and how its state is authoritative, not about how
+many users it serves.

@@ -45,12 +45,19 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 > infrastructure question, not a gameplay one:
 >
 > - `HANDOFF-ARCHITECTURE.md` — cloud-native architecture review of the
->   Kubernetes deployment. **First pass built.** "No server" no longer holds:
->   a minimal Node.js + SQLite backend (`server/`) now enables cross-device
->   save sync and a read-only remote parent view via a pairing code, both
->   opt-in and both fire-and-forget from the client's side, so the offline
->   zero-server folder copy of this game is unaffected either way. Its §10
->   is the exact hook for whoever touches this next.
+>   Kubernetes deployment. **Second pass built.** The first pass's "no
+>   server" invariant already fell (a minimal Node.js + SQLite backend now
+>   enables cross-device save sync and a read-only remote parent view). This
+>   pass retired a second invariant, explicitly this time, by the project
+>   owner's own call: the double-clicked, zero-build `index.html` folder
+>   copy no longer needs to keep working, since the game is deployed to a
+>   real Kubernetes platform now. That unlocked a real build step (esbuild +
+>   ES modules, replacing the 8-`<script>`-tag global-scope setup), flipped
+>   the sync server from a best-effort mirror to the authoritative copy
+>   (`Store.syncOnBoot()`), and added a real backup story for the SQLite
+>   database (in-process `VACUUM INTO` snapshots + retention). Its §11 is
+>   the addendum recording exactly what shipped and what's still deferred
+>   (off-node backup shipping, `.ts` conversion beyond JSDoc checking).
 >
 > Also ran **in parallel**, triggered by a second, younger sibling (age 5)
 > now wanting to play:
@@ -85,20 +92,37 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 
 ## Running it
 
-Open `index.html` — double-click it, no build step, no server, no dependencies.
-Everything is plain `<script>` tags (deliberately **not** ES modules, which browsers
-refuse to load over `file://`). Progress lives in `localStorage`.
+**This changed.** Through the graphics/curriculum/early-learner handoff chain
+above, this section said "double-click `index.html`, no build step, no
+dependencies" — that was true because the game had to keep working as a
+folder someone could hand off with zero setup. Once the game was deployed to
+a real Kubernetes platform, the project owner made the explicit call to
+retire that invariant (`docs/HANDOFF-ARCHITECTURE.md`'s second pass) in favor
+of a real build step. **For local development**, run `npm install` once,
+then `npm run build` to produce `dist/game.js`, and open `index.html` as
+before — it now loads that one bundled script instead of eight separate
+`<script>` tags. Progress still lives in `localStorage` (see "Save file"
+below for how that interacts with sync).
+
+`js/*.js` are real ES modules now (`import`/`export`), bundled with esbuild
+(`build.js`) into a single classic script — so the *built* `dist/game.js`
+still loads with a plain `<script src="dist/game.js">`, no `type="module"`,
+no CORS/`file://` restrictions to work around. The source files themselves
+do use `import`/`export`, though, so opening `index.html` without running
+`npm run build` first will not work — the double-click-the-raw-folder story
+is what got retired here, deliberately.
 
 Chrome, Edge, or Safari are needed for read-aloud; the game detects a missing
 Web Speech API and flashes the word on screen instead.
 
-**Version.** `APP_VERSION` (`js/app.js`, top of file) is a hand-bumped string —
-there's no build step and no git-derived build number to pull one from, so
-it's the one manual signal for "which copy of the app is this," shown in a
-quiet corner badge on every screen and again in the Grown-Ups dashboard's
-Settings tab. Bump it whenever you ship a change worth being able to tell
-apart from the last one; it's unrelated to `SAVE_VERSION` in `js/store.js`,
-which versions the save-file *shape*, not the code.
+**Version.** `APP_VERSION` (`js/app.js`, top of file) is still a hand-bumped
+string — there's now a build step, but still no git-derived or CI-derived
+build number wired up to replace it, so it remains the one manual signal for
+"which copy of the app is this," shown in a quiet corner badge on every
+screen and again in the Grown-Ups dashboard's Settings tab. Bump it whenever
+you ship a change worth being able to tell apart from the last one; it's
+unrelated to `SAVE_VERSION` in `js/store.js`, which versions the save-file
+*shape*, not the code.
 
 ## Layout
 
@@ -114,16 +138,33 @@ which versions the save-file *shape*, not the code.
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
 | `js/store.js` | localStorage persistence, profiles, stats, custom word lists |
 | `js/app.js` | Screens, game loop, avatar studio, coach's voice, grown-ups dashboard |
-| `server/` | Optional cross-device sync backend (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`). |
+| `build.js` | esbuild config — bundles `js/app.js` (which imports everything else) into `dist/game.js` |
+| `server/` | Cross-device sync backend, authoritative (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`). |
 
-Load order matters — `app.js` last, `words.js` first (`letters.js` and `language.js`
-right after it). They share globals rather than importing.
+`js/*.js` are ES modules with an explicit dependency graph now, not
+load-order-dependent globals: `words.js`, `letters.js`, `language.js`,
+`avatar.js`, and `audio.js` are leaves (no imports of their own); `skills.js`
+imports from `avatar.js`; `store.js` imports from `avatar.js`/`letters.js`/
+`language.js`/`words.js`; `app.js` imports from all of the above. `build.js`
+bundles from `app.js` as the single entry point. `tests/check.js` bundles a
+separate small entry (`tests/testEntry.js`, a barrel re-exporting the 6
+non-DOM files) since it needs those exports without `audio.js`/`app.js`'s
+DOM dependency — see "Testing" below.
 
-`server/` is a separate deployable, not part of the client bundle — the game itself
-still has no build step and still runs from a double-clicked `index.html` with zero
-setup. It only ever gets talked to if a profile opts into sync (`Store.enableSync()`);
-every call to it is fire-and-forget from `js/store.js`, so a missing or unreachable
-server changes nothing about how the game plays.
+`js/app.js` exposes a deliberate, minimal `window.__app` surface (`Store`,
+`arena`, `session`, a handful of functions) purely for
+`tests/screenshots.js` to drive — now that app.js's top-level bindings are
+module-scoped rather than implicit page globals, this is how a test harness
+still reaches in. Nothing else should read or write `window.__app`; it's a
+test hook, not a public API.
+
+`server/` is a separate deployable, not part of the client bundle. Unlike
+the game's own build step, it still ships with zero npm dependencies
+(`node:http` + `node:sqlite` only). It's no longer a best-effort mirror —
+`Store.syncOnBoot()` treats it as authoritative on boot when reachable, with
+`localStorage` as a resilience cache for when it isn't (see "Save file"
+below). It also now runs a periodic in-process backup of its own database
+(see "Server backups" below).
 
 ## The avatar rig — read this before touching a skill
 
@@ -204,16 +245,25 @@ Two profile fields drive the engagement loop and are worth knowing about:
   dashboard's Focus tab. `Store.selectReviewPool()` is the one function that
   reads `pinned`/`reviewMix`; `focusNote` is display-only and never read by
   the game itself.
-- **`sync`** — `{ code, lastSyncedAt, localOnly }`. Cross-device sync is **on
-  by default** — see `docs/HANDOFF-ARCHITECTURE.md`. Every profile gets a
-  `code` the moment it exists (`Store._autoProvisionSync()`, called from
-  `load()` for every profile and from `createProfile()`), and `Store.save()`
-  debounces an opportunistic push after every change — no dashboard visit
-  required. `localOnly` is the deliberate opt-out a grown-up flips from
-  Settings ("Play offline only"); while it's `true`, provisioning leaves the
-  profile alone instead of re-enabling it. Every sync call is still
-  fire-and-forget and silently no-ops without a reachable server, so the
-  offline folder copy of this game is unaffected either way.
+- **`sync`** — `{ code, lastSyncedAt, localOnly, pending, lastError }`.
+  Cross-device sync is **on by default** — see
+  `docs/HANDOFF-ARCHITECTURE.md`. Every profile gets a `code` the moment it
+  exists (`Store._autoProvisionSync()`, called from `load()` for every
+  profile and from `createProfile()`), and `Store.save()` debounces an
+  opportunistic push after every change — no dashboard visit required.
+  `localOnly` is the deliberate opt-out a grown-up flips from Settings
+  ("Play offline only"); while it's `true`, provisioning leaves the profile
+  alone instead of re-enabling it. **The server is authoritative on boot**
+  now (`Store.syncOnBoot()`, called from `app.js`'s `init()` right after
+  `load()`, bounded by an internal timeout) — `localStorage` is the
+  fallback used only when the server can't be reached in time, not the
+  thing trusted by default the way it used to be (see
+  `docs/HANDOFF-ARCHITECTURE.md` §11). `pending` is true whenever the last
+  attempted push hasn't been confirmed yet, so a failure gets retried on the
+  next boot instead of silently lost; `lastError` is display-only, read by
+  the Grown-Ups dashboard's Settings tab (`renderSyncSection()`). Every sync
+  call still silently no-ops without a reachable server — that resilience
+  didn't change, only which side is treated as the source of truth.
 - **`stage`** — `"speller"` or `"explorer"`. Which of the two tracks this profile
   plays: the original spelling game, or the pre-literacy letters track for a
   younger sibling (see `docs/HANDOFF-EARLY-LEARNER.md`). Always defaults to
@@ -355,9 +405,14 @@ folder tree still works exactly the same double-clickable, offline way even
 with an `assets/`-style subfolder of local files, as long as nothing fetches
 from a network. Nothing added any, though: every graphics improvement in that
 pass was achievable with existing inline SVG plus new CSS custom properties,
-so there was no concrete reason to add a file yet. Treat "no build step, no
-CDN, no network fetch" as the invariant that's still hard; "everything must
-be inline" no longer is.
+so there was no concrete reason to add a file yet. **Update, later pass:**
+"no build step" also stopped being an invariant once the game was deployed
+to Kubernetes for good (see "Running it" above) — there's now an esbuild
+step, deliberately, by the project owner's own call. What's still hard: no
+CDN, no third-party network fetch, and no child-identifying data leaving the
+household's own infrastructure (`docs/HANDOFF-ARCHITECTURE.md` §8.2) — the
+build step and the sync server are both self-hosted, not outsourced to
+someone else's cloud.
 
 **Cross-device sync is whole-snapshot and timestamp-wins, on purpose.** A single
 child can't play on two devices at the same instant, so a real conflict between
@@ -367,6 +422,19 @@ an operation log. `Store.reconcileSync()` sends the whole profile; whichever sid
 differences are gone. If that assumption ever stops holding — e.g. two kids
 sharing one synced profile from different devices at once — revisit this rather
 than patching around it.
+
+**Update, later pass: the server checks in on boot instead of only after
+changes.** The model above (whole-snapshot, timestamp-wins) is unchanged —
+what changed is *when* the server gets consulted. It used to be purely
+reactive: `reconcileSync()` only ran after a local change, so a correction
+from another device could sit unseen until the next save. `Store.syncOnBoot()`
+now runs once at startup, before the app renders, and pulls the server's
+copy within a bounded timeout if it's newer — `localStorage` is the
+fallback for when the server can't be reached in time, not the assumed-good
+copy it used to be. See `docs/HANDOFF-ARCHITECTURE.md` §11 for the full
+reasoning; this was a deliberate, scoped reversal of the offline-first
+posture that shaped every sync decision before it, not a redesign of the
+conflict model itself.
 
 **Sync flipped from opt-in to opt-out.** It shipped (§ above) as something a
 grown-up had to turn on per profile. It's now the default: `Store.load()` and
@@ -411,6 +479,28 @@ password is the whole interaction. The page is disabled outright
 the Helm values, so it stays off by default rather than accidentally exposed.
 Deleting a profile from the page reuses the existing public
 `DELETE /api/profiles/:code` route rather than a duplicate admin-only one.
+
+**Server backups are automatic, same-volume snapshots — Tier 1 only, on
+purpose.** `server/index.js` runs `store.backup()` (`server/db.js`, SQLite's
+own `VACUUM INTO`) once at startup and then on a `BACKUP_INTERVAL_MS`
+interval (default 24h), writing timestamped, independently-openable snapshot
+files to a `backups/` subdirectory next to the live database, and pruning
+down to the newest `BACKUP_RETENTION` (default 7) afterward. No WAL mode or
+external tool is needed — `VACUUM INTO` is SQLite's own mechanism for a
+consistent point-in-time copy of a live database. This protects against
+in-app mistakes (an accidental or malicious hit to the unauthenticated
+`DELETE /api/profiles/:code` route, a bad future migration) but explicitly
+**not** node/disk loss, since the backups live on the same PVC as the
+database they're backing up — shipping them off-node is deferred until this
+cluster actually has somewhere to ship them to (see
+`docs/HANDOFF-ARCHITECTURE.md` §11). `GET /api/admin/overview` reports
+`backups: { lastBackupAt, lastBackupError, count, totalBytes }` so this is
+visible from the existing admin page rather than needing a new one.
+**To restore**: stop the server pod, copy the chosen
+`backups/sync-<timestamp>.db` over the live `sync.db` path, restart — there's
+no automated restore path, deliberately, since an untested one-click restore
+button is worse than a documented manual step that's actually been tried at
+this scale.
 
 **Phonics-pattern grouping lives in source comments, not per-word metadata.**
 `js/words.js` groups each grade's words into named clusters (e.g. g3's
@@ -477,14 +567,33 @@ changed, arena didn't."
 ## Testing
 
 ```
+npm run build                # bundles js/app.js -> dist/game.js (esbuild)
 node tests/check.js          # logic: skills, animator, store, profiles, word lists
 node tests/screenshots.js    # writes self-driving copies of index.html to _debug/
+npm run typecheck            # tsc --noEmit over js/*.js via JSDoc + checkJs; non-blocking in CI
 ```
 
-`tests/check.js` runs the real game files in a `vm` context with a stubbed
-`localStorage` and a **hand-cranked frame clock**, so the `Animator` can be driven
-deterministically without a DOM. It covers the animator regressions specifically —
-idle hand-off, travel accounting, promise ordering, facing flips.
+`tests/check.js` needs `dist/game.js` to not exist for it to still work — it doesn't
+run the bundle at all. Instead it bundles its **own** small entry
+(`tests/testEntry.js`, which re-exports everything from the 6 non-DOM files:
+`words.js`, `letters.js`, `language.js`, `avatar.js`, `skills.js`, `store.js`)
+via esbuild into an IIFE exposing a `TestCore` global, then runs that inside
+a `vm` context with a stubbed `localStorage` and a **hand-cranked frame
+clock**, so the `Animator` can be driven deterministically without a DOM.
+This replaced an older trick (concatenating those 6 files as classic scripts
+sharing one global scope) that stopped working once they became real ES
+modules — `export`/`import` aren't valid inside a non-module `vm` script.
+`tests/check.js`'s own ~600 lines of assertions didn't need to change, only
+its ~15-line loader. It covers the animator regressions specifically — idle
+hand-off, travel accounting, promise ordering, facing flips.
+
+`tests/screenshots.js` similarly can't rely on `app.js`'s top-level bindings
+being page globals anymore — it destructures the stable ones (`Store`,
+`arena`, functions) once from the `window.__app` debug surface `app.js`
+exposes, but deliberately does *not* destructure `session`/`letterSession`
+(they're reassigned wholesale by `startSession()`/`startLetterRound()`, so a
+one-time destructure would go stale — it reads `window.__app.session` fresh
+each time instead).
 
 `_debug/` is generated output and safe to delete.
 
@@ -538,3 +647,14 @@ real time here, so if you go back to it:
   own screen's container correctly; this one didn't. Fixed by passing
   `.results-stage` explicitly, and while at it, every medal tier now gets a
   confetti burst, not just gold/silver — see "Everyone medals" above.
+- **`syncOnBoot()`'s bounded timeout wasn't actually bounded.** Its first
+  step — retrying a push left `pending` from last session — called
+  `await this.reconcileSync(p)` directly. `reconcileSync()` has no timeout
+  of its own; when the server was unreachable, that `await` hung
+  indefinitely, and since it ran *before* the timed pull step, the whole
+  point of `_raceTimeout` never got a chance to apply. Both steps now go
+  through `_raceTimeout`, not just the pull. Caught by a test asserting the
+  whole call resolves quickly when the server never responds — worth
+  keeping that kind of test whenever a new `await` gets added to this
+  function, since "add a step that skips the timeout wrapper" is an easy
+  mistake to reintroduce here.

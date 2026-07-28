@@ -17,6 +17,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install build tooling
+        run: npm ci
+
+      # Runs the same esbuild bundle the Docker build stage produces, plus
+      # tests/check.js against it — a broken bundle or a real regression in
+      # js/*.js is caught here, before either image gets pushed. This is the
+      # first test coverage this workflow has ever had (it previously went
+      # straight from checkout to docker build-push-action).
+      - name: Build and test the frontend bundle
+        run: |
+          npm run build
+          npm test
+
+      # Type-checking pass via JSDoc + tsconfig's checkJs, not a TypeScript
+      # rewrite. Deliberately non-blocking for now (`|| true`) — this is a
+      # first pass over 6,300 untyped lines, so it's expected to be noisy;
+      # tighten `strict` and make this blocking once real coverage exists.
+      - name: Type-check (report only)
+        run: npm run typecheck || true
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
