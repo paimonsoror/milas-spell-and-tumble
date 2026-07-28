@@ -356,6 +356,8 @@ function gradientDefs(rainbowId, galaxyId) {
   return out;
 }
 
+const prefersReducedMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+
 let thumbSeq = 0;
 
 /* Small static SVG previews for the avatar studio. Deliberately not live
@@ -489,6 +491,8 @@ class Gymnast {
     this._build();
     this.setLook(this.look);
     this.setPose(this.pose);
+    this._blinking = false;
+    this._scheduleBlink();
   }
 
   _build() {
@@ -805,22 +809,88 @@ class Gymnast {
     return petal(-4, -8) + petal(4, -8) + petal(0, -13) + `<circle cx="0" cy="-8" r="2.5" fill="${oc.main}"/>`;
   }
 
+  /* Eyes, brows and mouth are built separately (rather than one fused look
+     string per expression) so blinking can swap just the eyes in and out
+     without disturbing whatever brows/mouth the current expression drew —
+     see _scheduleBlink(). */
+  _eyeMarkup(x, kind) {
+    const hy = RIG.headY - RIG.neckY;
+    if (kind === "shut") return `<path d="M ${x - 3},${hy - 2} q 3,3 6,0" stroke="#3b2b20" stroke-width="1.6" fill="none" stroke-linecap="round"/>`;
+    if (kind === "wide") return `<circle cx="${x}" cy="${hy - 2}" r="2.6" fill="#3b2b20"/><circle cx="${x + 0.9}" cy="${hy - 3}" r=".9" fill="#fff"/>`;
+    return `<circle cx="${x}" cy="${hy - 2}" r="2" fill="#3b2b20"/><circle cx="${x + 0.7}" cy="${hy - 2.7}" r=".7" fill="#fff"/>`;
+  }
+
+  _browMarkup(name) {
+    const hy = RIG.headY - RIG.neckY;
+    // A straight brow reads as neutral/focused; tilting the outer end up or
+    // down is the cheapest way to turn the same 13-unit head into "curious",
+    // "concentrating" or "delighted" without redrawing the eyes.
+    const brow = (x, tiltOuterUp, y) =>
+      `<path d="M ${x - 3.4},${y} L ${x + 3.4},${y - tiltOuterUp * (x > 0 ? 1 : -1)}" stroke="#5b4636" stroke-width="1.4" fill="none" stroke-linecap="round"/>`;
+    const sets = {
+      happy: brow(-5, 1, hy - 7.5) + brow(5, 1, hy - 7.5),
+      focused: brow(-5, -0.8, hy - 7) + brow(5, -0.8, hy - 7),
+      excited: brow(-5, 2.2, hy - 9) + brow(5, 2.2, hy - 9),
+      oops: brow(-5, -1.6, hy - 7) + brow(5, -1.6, hy - 7),
+      proud: brow(-5, 1.6, hy - 8.5) + brow(5, 1.6, hy - 8.5)
+    };
+    return sets[name] || sets.happy;
+  }
+
+  _mouthMarkup(name) {
+    const hy = RIG.headY - RIG.neckY;
+    const mouths = {
+      happy: `<path d="M -4.5,${hy + 5} q 4.5,4 9,0" stroke="#b4553f" stroke-width="1.8" fill="none" stroke-linecap="round"/>`,
+      focused: `<path d="M -4,${hy + 5} l 8,0" stroke="#b4553f" stroke-width="1.8" stroke-linecap="round"/>`,
+      excited: `<ellipse cx="0" cy="${hy + 6}" rx="4.5" ry="3.6" fill="#b4553f"/>`,
+      oops: `<path d="M -4,${hy + 6} q 4,-3 8,0" stroke="#b4553f" stroke-width="1.8" fill="none" stroke-linecap="round"/>`,
+      // a closed, confident grin — for the results podium and studio unlocks,
+      // distinct from "excited"'s open-mouth surprise
+      proud: `<path d="M -5,${hy + 4.5} q 5,5.5 10,0" stroke="#b4553f" stroke-width="1.8" fill="none" stroke-linecap="round"/>`
+    };
+    return mouths[name] || mouths.happy;
+  }
+
+  _eyeKind(name) {
+    if (name === "oops") return "shut";
+    if (name === "excited" || name === "proud") return "wide";
+    return "dot";
+  }
+
+  _renderFeatures(name, eyeOverride) {
+    const hy = RIG.headY - RIG.neckY;
+    const kind = eyeOverride || this._eyeKind(name);
+    const blush = `<circle cx="-9" cy="${hy + 3}" r="3" fill="#f9a8d4" opacity=".55"/><circle cx="9" cy="${hy + 3}" r="3" fill="#f9a8d4" opacity=".55"/>`;
+    const sparkle = name === "proud" ? `<path d="M -14,${hy - 6} l 1.6,3.4 3.4,1.6 -3.4,1.6 -1.6,3.4 -1.6,-3.4 -3.4,-1.6 3.4,-1.6 Z" fill="#fde68a"/>` : "";
+    return (
+      blush +
+      this._browMarkup(name) +
+      this._eyeMarkup(-5, kind) +
+      this._eyeMarkup(5, kind) +
+      this._mouthMarkup(name) +
+      sparkle
+    );
+  }
+
   setExpression(name) {
     this.expression = name;
-    const hy = RIG.headY - RIG.neckY;
-    const eye = (x, kind) => {
-      if (kind === "shut") return `<path d="M ${x - 3},${hy - 2} q 3,3 6,0" stroke="#3b2b20" stroke-width="1.6" fill="none" stroke-linecap="round"/>`;
-      if (kind === "wide") return `<circle cx="${x}" cy="${hy - 2}" r="2.6" fill="#3b2b20"/><circle cx="${x + 0.9}" cy="${hy - 3}" r=".9" fill="#fff"/>`;
-      return `<circle cx="${x}" cy="${hy - 2}" r="2" fill="#3b2b20"/>`;
-    };
-    const looks = {
-      happy: eye(-5, "dot") + eye(5, "dot") + `<path d="M -4.5,${hy + 5} q 4.5,4 9,0" stroke="#b4553f" stroke-width="1.8" fill="none" stroke-linecap="round"/>`,
-      focused: eye(-5, "dot") + eye(5, "dot") + `<path d="M -4,${hy + 5} l 8,0" stroke="#b4553f" stroke-width="1.8" stroke-linecap="round"/>`,
-      excited: eye(-5, "wide") + eye(5, "wide") + `<ellipse cx="0" cy="${hy + 6}" rx="4.5" ry="3.6" fill="#b4553f"/>`,
-      oops: eye(-5, "shut") + eye(5, "shut") + `<path d="M -4,${hy + 6} q 4,-3 8,0" stroke="#b4553f" stroke-width="1.8" fill="none" stroke-linecap="round"/>`
-    };
-    const blush = `<circle cx="-9" cy="${hy + 3}" r="3" fill="#f9a8d4" opacity=".55"/><circle cx="9" cy="${hy + 3}" r="3" fill="#f9a8d4" opacity=".55"/>`;
-    this.n.features.innerHTML = blush + (looks[name] || looks.happy);
+    this.n.features.innerHTML = this._renderFeatures(name);
+  }
+
+  /* A held expression with no blinking reads as a painting, not a character.
+     This is a plain setTimeout loop, not a rAF tick, since a blink is a single
+     20ms swap rather than something that needs per-frame interpolation. */
+  _scheduleBlink() {
+    const delay = 2600 + Math.random() * 3200;
+    this._blinkTimer = setTimeout(() => {
+      if (!prefersReducedMotion() && this.n && this.n.features) {
+        this.n.features.innerHTML = this._renderFeatures(this.expression, "shut");
+        setTimeout(() => {
+          if (this.n && this.n.features) this.n.features.innerHTML = this._renderFeatures(this.expression);
+        }, 130);
+      }
+      this._scheduleBlink();
+    }, delay);
   }
 
   /* ---------- posing ---------- */

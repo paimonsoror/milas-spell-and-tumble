@@ -295,3 +295,85 @@ They own `js/words.js` and the actual spelling content, and their job should be
   imagery to match her interests; that's worth keeping.
 - The current 252 words are a reasonable placeholder written by a generalist, not a
   designed curriculum. They should feel free to replace all of them.
+
+## 9. Status — a graphics pass shipped against §5
+
+A later pass picked several items off the ranked list in §5 and the open
+questions in §6, specifically as a *graphics* brief (character, face, arena,
+palette) rather than a layout/interaction one. Read this before assuming any
+of §5 or §6 is still fully open.
+
+**Done:**
+
+- **§5.1, Avatar Studio.** Already done by the time this pass started —
+  `buildThumbnail()` in `js/avatar.js` replaced the text-pill grid with real
+  SVG previews per item (hair, bow, outfit, hands all render actual shapes;
+  colour slots show swatches). Its own comment cites this exact section.
+  Nobody had updated this file or `CLAUDE.md`'s chain note to say so — if
+  you're reading this before touching the studio, check the code before
+  redoing the work.
+- **§5.3, character presence.** She's now on 4 of 8 screens instead of 2:
+  the Results screen has a static, waist-up `Gymnast` instance
+  (`#res-gymnast`) posed in the same landing-salute the skills already end
+  on, standing in for the old text-emoji-only medal; Home has a small idling
+  one in the corner of the title (`#home-gymnast`, hidden under 640px so it
+  never fights the tiles for space per §5.2's "let the verbs dominate").
+  Letters/Language Play already had their own figures from the early-learner
+  and speech-and-language passes. Setup, Voice, and Profiles are still
+  character-free — genuinely open if someone wants to keep pushing this.
+- **§5.4, face expressiveness.** `Gymnast` now blinks on an idle timer
+  (`_scheduleBlink()`, off under `prefers-reduced-motion`), every expression
+  has eyebrows instead of just eyes+mouth, and there's a fifth expression
+  (`"proud"` — closed confident smile, raised brows, a small sparkle accent)
+  used for the results podium and available for studio-unlock moments. Eyes
+  glancing at the letter boxes while typing and a pre-hard-skill anticipation
+  beat are still open, per the original list.
+- **§6, arena colour routing.** The gotcha this section flagged — a `:root`
+  edit not reaching the arena — is fixed. The SVG's gradient stops and flat
+  fills now carry classes (`.arena-wall-top-stop`, `.arena-barrier`, etc.)
+  styled from new `--arena-*`/`--crowd-*`/`--judge-*` custom properties in
+  `:root` (see `css/styles.css`), and `buildCrowd()`/`buildJudges()`
+  (`js/app.js`) read the same properties via a `cssVar()` helper instead of
+  carrying their own literal arrays. One palette, in one place, same look as
+  before — the actual hues weren't changed, just where they live.
+- A small sparkle accent was added to the arena spotlight, and every medal
+  tier (not just gold/silver) now gets a confetti burst on Results — see the
+  bug this uncovered, below.
+- A real bug, found while wiring the above: the gold/silver confetti burst on
+  Results called `burstConfetti(n)` with no container, which defaults to
+  `#fx-layer` — an element that lives in the *game* screen, already hidden
+  by the time Results is showing. That confetti had never been visible.
+  Fixed by passing `.results-stage` explicitly, matching how the studio and
+  letters/language screens already did it correctly.
+
+**Still open, deliberately not touched by this pass:**
+
+- **§5.8 / §6, tablet layout.** The project owner confirmed Mila plays on an
+  iPad. This pass was scoped to graphics (character, face, arena, colour
+  plumbing), not layout or input, so the OS-keyboard-covers-the-lower-half
+  problem, the two-breakpoint stylesheet, and on-screen input are all
+  exactly as open as §5.8 originally found them. Don't read the tablet
+  answer above as "layout is handled" — it isn't yet.
+- **§6, palette saturation and profile inclusivity.** Still an open judgment
+  call. One data point for whoever picks it up: nothing about the existing
+  purple/pink/teal/gold reads as narrowly gendered on its own — the risk is
+  more about intensity/saturation for sustained use than hue choice — but
+  that's a read, not a resolution, and it wasn't tested with an actual
+  sibling or classmate profile.
+- **§5.2, tile hierarchy** (home tiles and setup choices all one visual
+  weight) and **§5.6, layout shift** on the feedback panel are both
+  unchanged — this pass added a character to the home screen without
+  restructuring the tiles underneath it.
+- **§5.7, letterforms.** Untouched; still the double-story monospace font
+  flagged as a literacy concern.
+
+**Architecture note for whoever's next:** the project owner opened up the
+"no external asset files" invariant in `CLAUDE.md` §7.1/this doc's §7.1 for
+this pass specifically (real image/SVG asset files are now allowed, not just
+inline SVG-in-JS/HTML). This pass didn't end up needing any — every
+improvement above was achievable with existing inline SVG plus new CSS
+custom properties — so nothing was added under a new `assets/`-style folder.
+The door is open if a future pass has a concrete reason to walk through it
+(a hand-illustrated backdrop, a sprite sheet), but "we're allowed to now"
+isn't itself a reason to add files. See `CLAUDE.md`'s own note on this for
+the exact constraint that changed.

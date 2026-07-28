@@ -18,6 +18,8 @@ const sfx = new Sfx();
 
 let arena = null;   // { gymnast, animator }
 let studio = null;  // { gymnast, animator }
+let home = null;    // { gymnast, animator } — the home-screen greeter, see refreshHome()
+let resultsGymnast = null; // plain Gymnast, no Animator — renderResults() poses her once statically
 let lettersArena = null; // { gymnast, animator } — the early-learner track's own stage, see startLetterRound()
 let languageArena = null; // { gymnast, animator } — "Language Play", see startLanguageRound() (HANDOFF-SPEECH-AND-LANGUAGE.md)
 let session = null;
@@ -73,6 +75,18 @@ function init() {
   languageArena = { gymnast: gG, animator: new Animator(gG, { min: 340, max: 360 }) };
   languageArena.gymnast.setLook(Store.data.look);
   languageArena.animator.idle();
+
+  // cropped waist-up on purpose — a full standing figure at this card's size
+  // makes her face illegibly tiny (HANDOFF-UI.md §5.4), so this trades the
+  // feet out of frame for a face that actually reads
+  resultsGymnast = new Gymnast($("#res-gymnast"), { x: 350, y: 250, zoom: 1.9 });
+
+  // same waist-up crop as the results podium, small and idling in the
+  // corner of the home title rather than a second full-body stage
+  const hG = new Gymnast($("#home-gymnast"), { x: 350, y: 250, zoom: 1.9 });
+  home = { gymnast: hG, animator: new Animator(hG, { min: 340, max: 360 }) };
+  home.gymnast.setLook(Store.data.look);
+  home.animator.idle();
 
   wireNav();
   wireSetup();
@@ -155,9 +169,17 @@ function playerName() {
   return (Store.data && Store.data.name) || "Champ";
 }
 
+// one read of the palette :root actually owns, rather than a second copy of
+// these colours hardcoded here — see the "arena scenery" section of
+// css/styles.css, which is where a future re-theme edits them
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 function buildCrowd() {
   const g = $("#crowd");
-  const shirts = ["#f472b6", "#fbbf24", "#34d399", "#60a5fa", "#f87171", "#c084fc", "#fb923c", "#a3e635"];
+  const shirts = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => cssVar(`--crowd-${n}`));
+  const wallColor = cssVar("--crowd-wall");
   let out = "";
   // three rows only: a fourth pushed the stands down far enough that her head
   // overlapped the audience instead of a clean wall
@@ -173,18 +195,20 @@ function buildCrowd() {
                 <circle cx="${jx}" cy="${y - 4}" r="7" fill="#f8d3b8" opacity=".8"/>
               </g>`;
     }
-    out += `<rect x="0" y="${y + 20}" width="700" height="7" fill="#241e5c" opacity=".85"/>`;
+    out += `<rect x="0" y="${y + 20}" width="700" height="7" fill="${wallColor}" opacity=".85"/>`;
   }
   g.innerHTML = out;
 }
 
 function buildJudges() {
   const g = $("#judge-heads");
+  const skin = cssVar("--judge-skin");
+  const suit = cssVar("--judge-suit");
   g.innerHTML = [46, 89, 132]
     .map(
       (x, i) => `<g class="judge-figure" data-judge="${i}">
-        <circle cx="${x}" cy="266" r="9" fill="#f8d3b8"/>
-        <rect x="${x - 10}" y="275" width="20" height="14" rx="4" fill="#1f2937"/>
+        <circle cx="${x}" cy="266" r="9" fill="${skin}"/>
+        <rect x="${x - 10}" y="275" width="20" height="14" rx="4" fill="${suit}"/>
       </g>`
     )
     .join("");
@@ -345,6 +369,8 @@ function refreshHome() {
   $("#home-title").textContent = `${playerName()}'s Spell & Tumble Championship`;
   $("#home-player").textContent = playerName();
   $("#home-stars").textContent = Store.data.stars;
+  home.gymnast.setLook(Store.data.look);
+  home.gymnast.setExpression("happy");
   $("#home-welcome").innerHTML = welcomeHtml();
   paintGoal($("#home-goal"));
   // which tiles show depends on stage, not word-list grade — see
@@ -1302,6 +1328,13 @@ function finishSession() {
 function renderResults(s, summary, judges, medal) {
   const acc = Math.round((summary.correct / summary.total) * 100);
 
+  // the "stuck the landing" salute pose every skill already ends on (see
+  // SKILLS in js/skills.js) — reused here so the podium look matches what
+  // she does mid-routine instead of inventing a second victory pose
+  resultsGymnast.setLook(Store.data.look);
+  resultsGymnast.setPose(poseFrom({ shL: 170, shR: 190, head: -6 }));
+  resultsGymnast.setExpression("proud");
+
   if (medal) {
     $("#res-medal").textContent = medal.icon;
     $("#res-title").textContent = `${playerName()} — ${medal.title}`;
@@ -1330,11 +1363,18 @@ function renderResults(s, summary, judges, medal) {
     });
     setTimeout(() => {
       sfx.fanfare(medal.tier);
-      if (medal.tier === "gold") burstConfetti(70);
-      else if (medal.tier === "silver") burstConfetti(30);
+      // every tier gets some confetti, not just gold/silver — "everyone
+      // medals" (see CLAUDE.md) applies to the celebration too, just scaled
+      // down for the lower tiers. Targets .results-stage, not the default
+      // #fx-layer: that lives in the game screen, which is hidden by the
+      // time this fires, so the old gold/silver-only version of this call
+      // was invisible confetti.
+      const counts = { gold: 70, silver: 34, bronze: 20, ribbon: 12 };
+      burstConfetti(counts[medal.tier] || 12, $(".results-stage"));
     }, 1350);
   } else {
     sfx.fanfare(acc >= 90 ? "silver" : "bronze");
+    setTimeout(() => burstConfetti(14, $(".results-stage")), 1350);
   }
 
   $("#res-stars").textContent = s.stars;

@@ -12,9 +12,18 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 > 1. `HANDOFF-ENGAGEMENT.md` — child engagement / reward psychology. **Done.** Its
 >    §3 table marks which numbers are load-bearing and which are placeholders; §4
 >    records which questions it resolved and which are still open.
-> 2. `HANDOFF-UI.md` — children's-game UI and visual design. **Active.** Ranked
->    interface problems, the open visual questions, and the hard constraints that
->    invalidate a normal design toolkit.
+> 2. `HANDOFF-UI.md` — children's-game UI and visual design. **Active — a
+>    graphics-focused pass just landed.** Ranked interface problems, the open
+>    visual questions, and the hard constraints that invalidate a normal design
+>    toolkit. Its §9 records what a later graphics pass shipped: the Avatar
+>    Studio visual dress-up turned out to already be done (nobody had marked it
+>    so); new work added a fifth facial expression plus an idle blink to
+>    `Gymnast`, put her on the Results and Home screens for the first time, and
+>    fixed the arena's colours (and a real invisible-confetti bug) so they route
+>    through `:root` instead of hardcoded hex. Tablet layout, palette
+>    saturation, tile hierarchy, and the monospace-letterform question are all
+>    still exactly as open as §5/§6 originally found them — this pass was
+>    scoped to graphics, not layout or interaction.
 > 3. `HANDOFF-PARENTS.md` — parental controls / child app management. **First
 >    pass done.** Added a Focus tab (review-mix slider, word pinning, a
 >    freeform note), per-word "needed help" tracking, and a read-only
@@ -336,9 +345,19 @@ pitch/speed treatment. A preset still works when none of its preferred voices ex
 it just sounds less distinct. `say()` takes rate/pitch as **multipliers** of the
 chosen coach voice so "slowly" and "spell it out" stay in character.
 
-**No external assets.** No fonts, images, or audio files — the figure is SVG, sound
-effects are synthesised in WebAudio, the crowd is generated. Keeps it a single
-double-clickable folder that works offline.
+**No external assets — relaxed to "none used yet," not "forbidden."** The rule
+was: no fonts, images, or audio files; the figure is SVG, sound effects are
+synthesised in WebAudio, the crowd is generated. That kept it a single
+double-clickable folder that works offline. The project owner explicitly
+opened this up during the graphics pass (`docs/HANDOFF-UI.md` §9) — real
+image/SVG asset files are now allowed, since a Docker-built, `nginx`-served
+folder tree still works exactly the same double-clickable, offline way even
+with an `assets/`-style subfolder of local files, as long as nothing fetches
+from a network. Nothing added any, though: every graphics improvement in that
+pass was achievable with existing inline SVG plus new CSS custom properties,
+so there was no concrete reason to add a file yet. Treat "no build step, no
+CDN, no network fetch" as the invariant that's still hard; "everything must
+be inline" no longer is.
 
 **Cross-device sync is whole-snapshot and timestamp-wins, on purpose.** A single
 child can't play on two devices at the same instant, so a real conflict between
@@ -417,6 +436,44 @@ explorer track's own interaction, which is `HANDOFF-EARLY-LEARNER.md`'s
 territory, not `js/words.js`'s. "Graduating" a profile stays the manual
 `Store.setStage()` toggle it already is.
 
+**Blinking is a `setTimeout` loop, not a rAF tick.** `Gymnast._scheduleBlink()`
+swaps `.gy-features` to shut-eyes for ~130ms on a randomized 2.6–5.8s cadence,
+then restores whatever expression was already showing — it never calls
+`setExpression()` itself, so it can't clobber the current look. A blink is a
+single discrete swap, not something that needs per-frame interpolation, so it
+doesn't need the Animator's rAF machinery at all. It's skipped outright under
+`prefers-reduced-motion` (`avatar.js`'s `prefersReducedMotion()`), which is
+also the first place in this codebase that checks that media query from JS
+rather than leaning on the one blanket CSS rule.
+
+**The Results podium reuses the skills' own landing pose, on purpose.**
+`#res-gymnast` (a plain `Gymnast`, no `Animator` — she's posed once,
+statically, not animated) uses `poseFrom({ shL: 170, shR: 190, head: -6 })`,
+the same arms-up salute every skill in `js/skills.js` already ends its last
+frame on. That was a deliberate reuse, not a shortcut: inventing a second
+"victory" pose risked looking like a different character on the two screens
+that matter most. She's cropped waist-up (`origin.y: 250, zoom: 1.9`,
+`viewBox="255 15 190 205"`) rather than shown full-length — a full standing
+figure at card size makes the face illegible, and the face is the whole point
+of putting her there. The Home-screen mascot (`#home-gymnast`) uses the same
+crop for the same reason.
+
+**The Home mascot hides below 640px, and the heading reserves her a lane
+above it.** `.home-hero`'s symmetric `padding: 0 100px` (only above 640px)
+keeps the centered `<h1>` centered while leaving room on the right so a long
+player name doesn't run underneath her — removing the padding without also
+hiding her would let "Firstname Lastname's Spell & Tumble Championship" wrap
+under her face at in-between widths.
+
+**Arena colours route through `:root`, all the way this time.** The SVG's
+gradient stops and flat fills carry classes styled from `--arena-*`/
+`--crowd-*`/`--judge-*` custom properties instead of inline hex, and
+`buildCrowd()`/`buildJudges()` (`js/app.js`) read those same properties via a
+`cssVar()` helper (one `getComputedStyle()` read per boot call, not per
+crowd member) instead of carrying a second, separate copy of the palette in
+JS. A future re-theme is a `:root` edit and nothing else — no more "chrome
+changed, arena didn't."
+
 ## Testing
 
 ```
@@ -473,3 +530,11 @@ real time here, so if you go back to it:
   `registerVisit()` is skipped while `Store.firstRun` is still true — so a
   page that's never been named stays unsaved, and a refresh asks again
   instead of dropping straight into a nameless "Player 1".
+- **The gold/silver medal confetti on Results was never visible.**
+  `burstConfetti(n)` with no `container` argument defaults to `#fx-layer`,
+  which lives inside the *game* screen — already `display:none` by the time
+  `renderResults()`'s `setTimeout` fires, since `showScreen("results")` has
+  already run. Every other call site (studio, letters, language) passed its
+  own screen's container correctly; this one didn't. Fixed by passing
+  `.results-stage` explicitly, and while at it, every medal tier now gets a
+  confetti burst, not just gold/silver — see "Everyone medals" above.

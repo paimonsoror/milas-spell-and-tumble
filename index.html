@@ -24,7 +24,8 @@
 
 <!-- ============================ HOME ============================ -->
 <section class="screen active" id="screen-home">
-  <div class="title-wrap">
+  <div class="title-wrap home-hero">
+    <div class="home-mascot"><svg id="home-gymnast" viewBox="255 55 190 195" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg></div>
     <h1 id="home-title">Spell &amp; Tumble Championship</h1>
     <div class="title-sub">Spell the word — then watch her fly. 🤸‍♀️📣</div>
   </div>
@@ -133,58 +134,66 @@
     <svg id="arena-scene" viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
       <defs>
         <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#312e81"/>
-          <stop offset="100%" stop-color="#4c1d95"/>
+          <stop class="arena-wall-top-stop" offset="0%"/>
+          <stop class="arena-wall-bottom-stop" offset="100%"/>
         </linearGradient>
         <linearGradient id="floorMat" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#a78bfa"/>
-          <stop offset="100%" stop-color="#7c3aed"/>
+          <stop class="arena-floor-top-stop" offset="0%"/>
+          <stop class="arena-floor-bottom-stop" offset="100%"/>
         </linearGradient>
         <radialGradient id="spot" cx="50%" cy="0%" r="80%">
-          <stop offset="0%" stop-color="#fef9c3" stop-opacity=".38"/>
-          <stop offset="100%" stop-color="#fef9c3" stop-opacity="0"/>
+          <stop class="arena-spot-stop" offset="0%" stop-opacity=".38"/>
+          <stop class="arena-spot-stop" offset="100%" stop-opacity="0"/>
         </radialGradient>
       </defs>
 
       <rect width="700" height="380" fill="url(#wall)"/>
       <ellipse cx="350" cy="40" rx="330" ry="230" fill="url(#spot)"/>
 
+      <!-- a little sparkle in the spotlight — cheap, static, and the kind of
+           small magic touch a children's stage deserves (HANDOFF-UI.md §5) -->
+      <g class="arena-sparkle" opacity=".8">
+        <path d="M 210,50 l 3,9 9,3 -9,3 -3,9 -3,-9 -9,-3 9,-3 Z"/>
+        <path d="M 470,30 l 2.4,7 7,2.4 -7,2.4 -2.4,7 -2.4,-7 -7,-2.4 7,-2.4 Z"/>
+        <path d="M 330,15 l 2,6 6,2 -6,2 -2,6 -2,-6 -6,-2 6,-2 Z"/>
+      </g>
+
       <!-- crowd (filled in by JS) -->
       <g id="crowd"></g>
 
       <!-- barrier wall under the stands, then the ground plane, so the arena
            reads as a room rather than a mat floating in a purple void -->
-      <rect x="0" y="166" width="700" height="142" fill="#2e1065"/>
-      <rect x="0" y="166" width="700" height="5" fill="#8b5cf6" opacity=".8"/>
-      <rect x="0" y="308" width="700" height="72" fill="#5b21b6"/>
-      <rect x="0" y="308" width="700" height="4" fill="#7c3aed" opacity=".8"/>
+      <rect class="arena-barrier" x="0" y="166" width="700" height="142"/>
+      <rect class="arena-barrier-edge" x="0" y="166" width="700" height="5" opacity=".8"/>
+      <rect class="arena-ground" x="0" y="308" width="700" height="72"/>
+      <rect class="arena-ground-edge" x="0" y="308" width="700" height="4" opacity=".8"/>
 
       <!-- banner -->
       <g>
-        <path d="M 190,0 L 510,0 L 510,44 L 350,58 L 190,44 Z" fill="#be185d"/>
-        <path d="M 190,44 L 350,58 L 510,44 L 510,50 L 350,64 L 190,50 Z" fill="#831843"/>
+        <path class="arena-banner" d="M 190,0 L 510,0 L 510,44 L 350,58 L 190,44 Z"/>
+        <path class="arena-banner-shadow" d="M 190,44 L 350,58 L 510,44 L 510,50 L 350,64 L 190,50 Z"/>
         <text x="350" y="30" text-anchor="middle" font-family="Trebuchet MS, sans-serif"
               font-size="19" font-weight="bold" fill="#fff" letter-spacing="1.5">STATE CHAMPIONSHIP</text>
       </g>
 
       <!-- judges' table, sitting on the ground plane -->
       <g id="judges-table">
-        <rect x="24" y="274" width="130" height="34" rx="5" fill="#1e1b4b"/>
-        <rect x="24" y="274" width="130" height="6" rx="3" fill="#f472b6"/>
+        <rect class="arena-judge-table" x="24" y="274" width="130" height="34" rx="5"/>
+        <rect class="arena-judge-table-trim" x="24" y="274" width="130" height="6" rx="3"/>
         <g id="judge-heads"></g>
       </g>
 
       <!-- balance beam off to the side, just for scenery -->
       <g opacity=".9">
-        <rect x="556" y="280" width="122" height="9" rx="3" fill="#d97706"/>
-        <rect x="566" y="289" width="7" height="19" fill="#78350f"/>
-        <rect x="660" y="289" width="7" height="19" fill="#78350f"/>
+        <rect class="arena-beam" x="556" y="280" width="122" height="9" rx="3"/>
+        <rect class="arena-beam-leg" x="566" y="289" width="7" height="19"/>
+        <rect class="arena-beam-leg" x="660" y="289" width="7" height="19"/>
       </g>
 
       <!-- the competition floor; its top edge at y=312 is where she stands -->
       <rect x="40" y="312" width="620" height="46" rx="6" fill="url(#floorMat)"/>
-      <rect x="52" y="318" width="596" height="34" rx="4" fill="none" stroke="#ddd6fe" stroke-width="2" stroke-dasharray="9 7" opacity=".55"/>
-      <rect x="0" y="358" width="700" height="22" fill="#3b0764"/>
+      <rect class="arena-mat-line" x="52" y="318" width="596" height="34" rx="4" fill="none" stroke-width="2" stroke-dasharray="9 7" opacity=".55"/>
+      <rect class="arena-lip" x="0" y="358" width="700" height="22"/>
     </svg>
 
     <!-- the gymnast lives in her own layer so the scenery never gets redrawn -->
@@ -220,7 +229,10 @@
 <!-- ============================ RESULTS ============================ -->
 <section class="screen" id="screen-results">
   <div class="card center">
-    <div class="medal-big" id="res-medal">🥇</div>
+    <div class="results-stage">
+      <svg id="res-gymnast" viewBox="255 15 190 205" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+      <div class="medal-big" id="res-medal">🥇</div>
+    </div>
     <h2 id="res-title">Gold Medal!</h2>
     <div class="score-big" id="res-score">9.4</div>
     <p class="muted" id="res-sub">Final score</p>

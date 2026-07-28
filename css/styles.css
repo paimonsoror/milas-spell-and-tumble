@@ -23,6 +23,38 @@
   --radius: 20px;
   --font: "Trebuchet MS", "Segoe UI", "Verdana", system-ui, sans-serif;
   --font-letters: "Consolas", "SF Mono", "Courier New", monospace;
+
+  /* ---------- arena scenery ----------
+     HANDOFF-UI.md §6 flagged that a :root edit alone re-themes the chrome
+     but leaves the arena — the largest coloured surface in the game —
+     untouched, because its colours were literals in index.html's SVG and
+     in buildCrowd()/buildJudges() (js/app.js). Both now read from here:
+     the SVG via CSS rules in the "arena scenery" section below, the JS via
+     getComputedStyle() (see ARENA_THEME in js/app.js). */
+  --arena-wall-top: #312e81;
+  --arena-wall-bottom: #4c1d95;
+  --arena-floor-top: #a78bfa;
+  --arena-floor-bottom: #7c3aed;
+  --arena-spot: #fef9c3;
+  --arena-barrier: #2e1065;
+  --arena-barrier-edge: #8b5cf6;
+  --arena-ground: #5b21b6;
+  --arena-ground-edge: #7c3aed;
+  --arena-lip: #3b0764;
+  --arena-mat-line: #ddd6fe;
+  --arena-banner: #be185d;
+  --arena-banner-shadow: #831843;
+  --arena-beam: #d97706;
+  --arena-beam-leg: #78350f;
+
+  --crowd-1: #f472b6; --crowd-2: #fbbf24; --crowd-3: #34d399; --crowd-4: #60a5fa;
+  --crowd-5: #f87171; --crowd-6: #c084fc; --crowd-7: #fb923c; --crowd-8: #a3e635;
+  --crowd-wall: #241e5c;
+
+  --judge-skin: #f8d3b8;
+  --judge-suit: #1f2937;
+  --judge-table: #1e1b4b;
+  --judge-table-trim: #f472b6;
 }
 
 * { box-sizing: border-box; }
@@ -120,6 +152,19 @@ p { margin: 0 0 .8em; line-height: 1.5; }
   text-shadow: 0 3px 0 #fff, 0 5px 0 rgba(109, 40, 217, .25);
 }
 .title-sub { font-size: clamp(15px, 2.4vw, 19px); color: var(--ink-soft); margin-bottom: 18px; }
+
+/* she greets Mila the moment the app opens, rather than appearing on only
+   2 of 8 screens (HANDOFF-UI.md §5.3) — small and to the side so the two
+   verbs she actually came for (play, dress up) still dominate the screen,
+   per that same brief's §5.2 */
+.home-hero { position: relative; }
+.home-mascot { position: absolute; top: -8px; right: 4px; width: 88px; height: 92px; pointer-events: none; }
+.home-mascot svg { width: 100%; height: 100%; }
+@media (max-width: 640px) { .home-mascot { display: none; } }
+/* reserve her a lane so a long name in the heading ("Player One's Spell &
+   Tumble Championship") wraps before reaching her instead of running
+   underneath — symmetric padding keeps the centered heading text centered */
+@media (min-width: 641px) { .home-hero { padding: 0 100px; } }
 
 .home-grid {
   display: grid;
@@ -320,6 +365,28 @@ p { margin: 0 0 .8em; line-height: 1.5; }
 .arena svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .arena .layer-fx { position: absolute; inset: 0; pointer-events: none; }
 
+/* ---------- arena scenery ----------
+   Colours live in :root (see the "arena scenery" block up top), not here,
+   so a future palette change only ever needs editing in one place. */
+.arena-wall-top-stop { stop-color: var(--arena-wall-top); }
+.arena-wall-bottom-stop { stop-color: var(--arena-wall-bottom); }
+.arena-floor-top-stop { stop-color: var(--arena-floor-top); }
+.arena-floor-bottom-stop { stop-color: var(--arena-floor-bottom); }
+.arena-spot-stop { stop-color: var(--arena-spot); }
+.arena-sparkle path { fill: var(--arena-spot); }
+.arena-barrier { fill: var(--arena-barrier); }
+.arena-barrier-edge { fill: var(--arena-barrier-edge); }
+.arena-ground { fill: var(--arena-ground); }
+.arena-ground-edge { fill: var(--arena-ground-edge); }
+.arena-lip { fill: var(--arena-lip); }
+.arena-mat-line { stroke: var(--arena-mat-line); }
+.arena-banner { fill: var(--arena-banner); }
+.arena-banner-shadow { fill: var(--arena-banner-shadow); }
+.arena-beam { fill: var(--arena-beam); }
+.arena-beam-leg { fill: var(--arena-beam-leg); }
+.arena-judge-table { fill: var(--judge-table); }
+.arena-judge-table-trim { fill: var(--judge-table-trim); }
+
 .gy-limb { stroke-width: 11; stroke-linecap: round; }
 .gy-limb.gy-leg { stroke-width: 12; }
 .gy-back { opacity: .78; }
@@ -481,6 +548,24 @@ input[type="text"].spell-input.shake { animation: shake .4s ease; }
 .mc-option.mc-wrong { border-color: var(--red); background: #fee2e2; color: #b91c1c; }
 
 /* ---------- results ---------- */
+
+/* She was the one who just performed the routine, so she's the one who
+   takes the podium here too — not just a text emoji floating on its own
+   (HANDOFF-UI.md §5.3 flagged results as the emotional peak with no
+   character on it at all). #res-gymnast is a plain static Gymnast instance
+   (no Animator, see renderResults()) posed once per results screen. */
+.results-stage {
+  position: relative;
+  width: 220px; height: 200px;
+  margin: 0 auto -8px;
+  overflow: hidden;
+}
+.results-stage svg#res-gymnast { position: absolute; inset: 0; width: 100%; height: 100%; }
+.results-stage .medal-big {
+  position: absolute; right: 2px; top: 42%;
+  font-size: 46px; line-height: 1;
+  filter: drop-shadow(0 3px 3px rgba(74, 46, 120, .35));
+}
 
 .medal-big { font-size: 90px; line-height: 1; }
 .score-big {
