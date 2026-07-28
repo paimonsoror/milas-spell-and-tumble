@@ -814,10 +814,21 @@ table.data .word { font-family: var(--font-letters); font-weight: bold; }
 .bar.warn > i { background: var(--gold); }
 .bar.bad > i { background: var(--red); }
 
-.trend { display: flex; align-items: flex-end; gap: 4px; height: 90px; }
-.trend .col { flex: 1 1 0; min-width: 6px; background: var(--purple); border-radius: 4px 4px 0 0; position: relative; }
-.trend .col.low { background: var(--gold); }
-.trend .col.bad { background: var(--red); }
+.trend-range { display: flex; gap: 8px; margin: 8px 0 12px; }
+.pill {
+  border: 2px solid var(--line); background: #fff; color: var(--ink-soft);
+  border-radius: 999px; padding: 6px 14px; font-family: var(--font); font-weight: bold;
+  font-size: 13px; cursor: pointer;
+}
+.pill[aria-pressed="true"] { background: var(--purple); border-color: var(--purple); color: #fff; }
+
+.trend-chart { width: 100%; height: 160px; display: block; }
+.trend-grid { stroke: var(--line); stroke-width: 1; }
+.trend-axis { fill: var(--ink-soft); font-size: 11px; font-family: var(--font); }
+.trend-area { fill: var(--purple); opacity: 0.12; stroke: none; }
+.trend-line { fill: none; stroke: var(--purple); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.trend-dot { fill: var(--purple); }
+.trend-pt:hover .trend-dot { r: 6; }
 
 textarea.list-edit {
   width: 100%; min-height: 150px;

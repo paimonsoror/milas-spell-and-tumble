@@ -75,6 +75,13 @@ window.__app = {
 async function init() {
   $("#app-version").textContent = "v" + APP_VERSION;
 
+  // Fire-and-forget, same reasoning as sync below — a missing/unsupported
+  // service worker (or a browser that blocks it, e.g. private browsing)
+  // changes nothing about how the game plays.
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+
   const remoteCode = new URLSearchParams(location.search).get("code");
   if (remoteCode) return initRemoteView(remoteCode);
 
@@ -2347,16 +2354,6 @@ function pct(n) {
   return Math.round(n * 100) + "%";
 }
 
-/* Monday-of-the-week timestamp, used to bucket sessions for the by-week
-   rollup — local calendar, same reasoning as Store's dayKey(). */
-function weekKey(ts) {
-  const d = new Date(ts);
-  const day = (d.getDay() + 6) % 7; // 0 = Monday
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - day);
-  return d.getTime();
-}
-
 /* Letters have no equivalent of Store.data.stats — the explorer track never
    touches it — so an explorer profile gets its own view here instead of a
    Progress tab full of zeroes. */
@@ -2426,25 +2423,21 @@ function accuracyAcross(progressMap) {
   return seen ? right / seen : null;
 }
 
+// 4 weeks by default; null means "all time" (up to the 250-session cache
+// recordSession() already enforces). Module-level so the choice survives
+// re-renders within the same dashboard visit, same as other simple UI
+// state elsewhere in this file (e.g. editingListId).
+let progressTrendRangeDays = 28;
+
 function renderProgressTab() {
   if (Store.data.stage === "explorer") { renderLettersProgressTab(); return; }
   const st = Store.data.stats;
-  const sessions = st.sessions.slice(-24);
   const acc = st.attempts ? st.correct / st.attempts : 0;
   const distinct = Object.keys(st.words).length;
   const mastered = Store.masteredWords().length;
   const trouble = Store.troubleWords(8);
   const totalMinutes = Math.round(st.sessions.reduce((a, s) => a + (s.ms || 0), 0) / 60000);
-
-  const bars = sessions
-    .map((s) => {
-      const a = s.total ? s.correct / s.total : 0;
-      const cls = a >= 0.9 ? "" : a >= 0.7 ? "low" : "bad";
-      const h = Math.max(6, Math.round(a * 90));
-      const when = new Date(s.ts).toLocaleDateString();
-      return `<div class="col ${cls}" style="height:${h}px" title="${when} · ${s.correct}/${s.total} (${pct(a)}) · ${s.listLabel}"></div>`;
-    })
-    .join("");
+  const trendPoints = Store.sessionTrend(st.sessions, progressTrendRangeDays);
 
   const troubleRows = trouble.length
     ? trouble
@@ -2462,28 +2455,6 @@ function renderProgressTab() {
         })
         .join("")
     : `<tr><td colspan="6" class="muted">No misses recorded yet.</td></tr>`;
-
-  // by-week rollup, computed on read from the same capped sessions array —
-  // no new storage, just a coarser view than the last-24 bar chart above
-  const weekMap = new Map();
-  for (const s of st.sessions) {
-    const wk = weekKey(s.ts);
-    const w = weekMap.get(wk) || { correct: 0, total: 0, ts: s.ts };
-    w.correct += s.correct || 0;
-    w.total += s.total || 0;
-    w.ts = Math.max(w.ts, s.ts);
-    weekMap.set(wk, w);
-  }
-  const weeks = [...weekMap.values()].sort((a, b) => a.ts - b.ts).slice(-10);
-  const weekBars = weeks
-    .map((w) => {
-      const a = w.total ? w.correct / w.total : 0;
-      const cls = a >= 0.9 ? "" : a >= 0.7 ? "low" : "bad";
-      const h = Math.max(6, Math.round(a * 90));
-      const when = new Date(w.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      return `<div class="col ${cls}" style="height:${h}px" title="Week of ${when} · ${w.correct}/${w.total} (${pct(a)})"></div>`;
-    })
-    .join("");
 
   const recent = st.sessions
     .slice(-8)
@@ -2511,14 +2482,13 @@ function renderProgressTab() {
       <div class="stat-box"><div class="k">Stars earned</div><div class="v">${Store.data.starsAllTime}</div><div class="sub">${Store.data.stars} unspent</div></div>
     </div>
 
-    <h3>Accuracy over the last ${sessions.length || 0} sessions</h3>
-    ${sessions.length ? `<div class="trend">${bars}</div>` : '<p class="muted">Play a session and this chart fills in.</p>'}
-
-    ${
-      weeks.length > 1
-        ? `<h3 style="margin-top:24px">By week</h3><div class="trend">${weekBars}</div>`
-        : ""
-    }
+    <h3>Accuracy over time</h3>
+    <div class="trend-range">
+      <button type="button" class="pill" data-range="28" aria-pressed="${progressTrendRangeDays === 28}">4 weeks</button>
+      <button type="button" class="pill" data-range="84" aria-pressed="${progressTrendRangeDays === 84}">12 weeks</button>
+      <button type="button" class="pill" data-range="0" aria-pressed="${!progressTrendRangeDays}">All time</button>
+    </div>
+    ${trendPoints.length ? renderTrendChart(trendPoints) : '<p class="muted">Play a session and this chart fills in.</p>'}
 
     <h3 style="margin-top:24px">Still practicing</h3>
     <p class="muted" style="font-size:14px">⭐ practices a word more often, 💤 eases off it — pin from here or Word Detail.</p>
@@ -2529,11 +2499,70 @@ function renderProgressTab() {
     <table class="data"><thead><tr><th>When</th><th>Mode</th><th>List</th><th>Correct</th><th>Score</th><th></th></tr></thead>
       <tbody>${recent || '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'}</tbody></table>`;
 
+  $$("[data-range]", $("#tab-progress")).forEach((btn) =>
+    btn.addEventListener("click", () => {
+      progressTrendRangeDays = Number(btn.dataset.range) || null;
+      renderProgressTab();
+    })
+  );
+
   wirePinButtons($("#tab-progress"), () => {
     renderProgressTab();
     renderFocusTab();
     renderWordsTab();
   });
+}
+
+/* A small hand-rolled SVG line chart — one point per session, accuracy on
+   the y-axis (see Store.sessionTrend()'s own comment for why accuracy, not
+   score) — no charting library, keeping with this project's zero-new-
+   runtime-dependency philosophy. Hover detail uses a native SVG <title> per
+   point, the same technique the app already relies on for the HTML `title`
+   tooltips elsewhere, rather than a bespoke crosshair/tooltip layer. */
+function renderTrendChart(points) {
+  const W = 600, H = 160, padL = 34, padR = 10, padT = 10, padB = 22;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const minTs = points[0].ts, maxTs = points[points.length - 1].ts;
+  const span = Math.max(1, maxTs - minTs);
+  const x = (ts) => padL + (points.length > 1 ? ((ts - minTs) / span) * plotW : plotW / 2);
+  const y = (a) => padT + (1 - a) * plotH;
+
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.ts).toFixed(1)},${y(p.accuracy).toFixed(1)}`).join(" ");
+  const baseY = (padT + plotH).toFixed(1);
+  const areaPath = `${linePath} L${x(maxTs).toFixed(1)},${baseY} L${x(minTs).toFixed(1)},${baseY} Z`;
+
+  const dots = points
+    .map((p) => {
+      const cx = x(p.ts).toFixed(1), cy = y(p.accuracy).toFixed(1);
+      const when = new Date(p.ts).toLocaleDateString();
+      const scoreLabel = p.score ? ` · score ${p.score.toFixed(1)}` : "";
+      const medalLabel = p.medal ? ` · ${p.medal}` : "";
+      return `<g class="trend-pt">
+        <circle cx="${cx}" cy="${cy}" r="9" fill="transparent"></circle>
+        <circle class="trend-dot" cx="${cx}" cy="${cy}" r="4"></circle>
+        <title>${when} · ${pct(p.accuracy)} · ${escapeHtml(p.listLabel || "")}${scoreLabel}${medalLabel}</title>
+      </g>`;
+    })
+    .join("");
+
+  const firstLabel = new Date(minTs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const lastLabel = new Date(maxTs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const midY = (padT + plotH / 2).toFixed(1);
+
+  return `
+    <svg class="trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Accuracy over time, from ${firstLabel} to ${lastLabel}">
+      <line x1="${padL}" y1="${padT}" x2="${W - padR}" y2="${padT}" class="trend-grid"></line>
+      <line x1="${padL}" y1="${midY}" x2="${W - padR}" y2="${midY}" class="trend-grid"></line>
+      <line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}" class="trend-grid"></line>
+      <text x="2" y="${Number(padT) + 4}" class="trend-axis">100%</text>
+      <text x="2" y="${Number(midY) + 4}" class="trend-axis">50%</text>
+      <text x="2" y="${Number(baseY) + 4}" class="trend-axis">0%</text>
+      <path d="${areaPath}" class="trend-area"></path>
+      <path d="${linePath}" class="trend-line"></path>
+      ${dots}
+      <text x="${padL}" y="${H - 4}" class="trend-axis">${firstLabel}</text>
+      <text x="${W - padR}" y="${H - 4}" class="trend-axis" text-anchor="end">${lastLabel}</text>
+    </svg>`;
 }
 
 /* Shared boost/retire toggle used on both the Progress and Word Detail
@@ -2774,6 +2803,35 @@ function renderListsTab() {
   });
 }
 
+/* iOS has no programmatic install prompt (unlike Android/Chrome's automatic
+   banner) — the only way to install is Safari's Share -> "Add to Home
+   Screen," which nothing can trigger from a page. This is the closest
+   available signal for "installable but hasn't been" on iOS specifically:
+   `navigator.standalone` only exists there, and is `true` once installed.
+   The dismissal is about this browser/device, not this child's profile, so
+   it deliberately lives in a plain localStorage key rather than Store's
+   synced save file — installing the app isn't something that should
+   propagate to a different device. */
+function shouldShowIosInstallHint() {
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isStandalone = navigator.standalone === true;
+  return isIos && !isStandalone && !iosInstallHintDismissed();
+}
+function iosInstallHintDismissed() {
+  try {
+    return localStorage.getItem("mila-ios-hint-dismissed") === "1";
+  } catch {
+    return false;
+  }
+}
+function dismissIosInstallHint() {
+  try {
+    localStorage.setItem("mila-ios-hint-dismissed", "1");
+  } catch {
+    // private browsing or similar — the hint just reappears next visit, harmless
+  }
+}
+
 function renderSyncSection(sync) {
   if (sync.localOnly) {
     return `
@@ -2912,6 +2970,15 @@ function renderSettingsTab() {
     <h3 style="margin-top:24px">Playing on other devices</h3>
     ${renderSyncSection(Store.data.sync)}
 
+    ${
+      shouldShowIosInstallHint()
+        ? `<h3 style="margin-top:24px">Install this app</h3>
+           <p class="muted">On this iPhone or iPad, tap the Share icon in Safari's toolbar,
+              then "Add to Home Screen" — it'll open full-screen, just like a real app, with no address bar.</p>
+           <div class="row"><button class="btn small ghost" id="set-dismiss-ios-hint">Got it</button></div>`
+        : ""
+    }
+
     <h3 style="margin-top:24px">Danger zone</h3>
     <div class="row">
       <button class="btn small ghost" id="set-reset-stats">Clear stats only</button>
@@ -2980,6 +3047,11 @@ function renderSettingsTab() {
       }
     };
     reader.readAsText(file);
+  });
+
+  bind("#set-dismiss-ios-hint", "click", () => {
+    dismissIosInstallHint();
+    renderSettingsTab();
   });
 
   bind("#sync-enable", "click", () => {

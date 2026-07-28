@@ -542,6 +542,33 @@ const Store = {
     return limit ? rows.slice(0, limit) : rows;
   },
 
+  /* Buckets session history into a chart-ready trend, one point per session.
+     Accuracy (correct/total) is the metric, not score — score is
+     competition-only and stays 0 in practice mode (see CLAUDE.md's
+     "Everyone medals"), so charting it against practice sessions on the
+     same axis would be misleading. `rangeDays` filters to the trailing N
+     days; omit it (or pass a falsy value) for the full cached history (up
+     to 250 sessions — recordSession()'s own cap). Takes `sessions`
+     explicitly rather than reading `this.data`, same reasoning as
+     selectReviewPool() above: pure, testable, and reusable — in spirit
+     shared with server/admin.html's own small copy of this same shape,
+     since that page is a separate deployable that can't import this file
+     (see docs/HANDOFF-ARCHITECTURE.md §11 / CLAUDE.md's Layout table). */
+  sessionTrend(sessions, rangeDays) {
+    const cutoff = rangeDays ? Date.now() - rangeDays * 86400000 : 0;
+    return (sessions || [])
+      .filter((s) => s.ts >= cutoff)
+      .map((s) => ({
+        ts: s.ts,
+        accuracy: s.total ? s.correct / s.total : 0,
+        mode: s.mode,
+        listLabel: s.listLabel,
+        score: s.score || 0,
+        medal: s.medal || null
+      }))
+      .sort((a, b) => a.ts - b.ts);
+  },
+
   /* ---- focus / review preferences (grown-ups dashboard) ---- */
 
   setPinned(word, mode) {

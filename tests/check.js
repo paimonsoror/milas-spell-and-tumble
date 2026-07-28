@@ -463,6 +463,33 @@ ok(Object.keys(ctx.Store.data.languagePlay.sound.pairs).length === 0, "an old sa
   ok(retired.rest.some((p) => p[0] === "cat"), "a retired word still appears in rest, not removed from her curriculum");
 }
 
+/* ---- sessionTrend ---- */
+{
+  const DAY = 86400000;
+  const now = Date.now();
+  const sessions = [
+    { ts: now - 40 * DAY, mode: "practice", total: 10, correct: 5, score: 0, medal: null, listLabel: "Grade 3" },
+    { ts: now - 20 * DAY, mode: "competition", total: 10, correct: 8, score: 8.2, medal: "silver", listLabel: "Grade 3" },
+    { ts: now - 2 * DAY, mode: "practice", total: 8, correct: 8, score: 0, medal: null, listLabel: "Grade 3" },
+    { ts: now - 1 * DAY, mode: "competition", total: 0, correct: 0, score: 0, medal: null, listLabel: "Grade 3" } // an edge case: 0 attempted
+  ];
+
+  const all = ctx.Store.sessionTrend(sessions);
+  ok(all.length === 4, "sessionTrend with no range returns every cached session");
+  ok(all[0].ts === sessions[0].ts, "sessionTrend sorts ascending by time");
+  ok(all[2].accuracy === 1, "sessionTrend computes accuracy as correct/total");
+  ok(all[3].accuracy === 0, "sessionTrend doesn't divide by zero for a 0-attempted session");
+  ok(all[1].score === 8.2 && all[1].medal === "silver", "sessionTrend carries score/medal through for competition sessions");
+  ok(all[0].score === 0 && all[0].medal === null, "practice sessions keep score 0 and medal null, not charted as if scored");
+
+  const last30 = ctx.Store.sessionTrend(sessions, 30);
+  ok(last30.length === 3, "sessionTrend filters to the trailing N days when a range is given");
+  ok(!last30.some((s) => s.ts === sessions[0].ts), "sessionTrend excludes sessions older than the requested range");
+
+  ok(ctx.Store.sessionTrend([]).length === 0, "sessionTrend handles no session history without throwing");
+  ok(ctx.Store.sessionTrend(undefined).length === 0, "sessionTrend handles a missing sessions array without throwing");
+}
+
 /* ---- early-learner letters content ---- */
 {
   ok(ctx.LETTERS.length === 26, `26 letters (got ${ctx.LETTERS.length})`);

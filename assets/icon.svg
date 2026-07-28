@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Full-bleed square, no pre-rounded corners or transparency on purpose —
+       both iOS (apple-touch-icon) and Android (maskable manifest icon) apply
+       their own corner/shape mask on top, and pre-rounding here would fight
+       that. The star sits inside Android's ~66% maskable safe zone. -->
+  <rect width="512" height="512" fill="#8b5cf6"/>
+  <path fill="#ffffff" d="M256,106 L292.4,205.8 L398.7,209.6 L315.0,275.2 L344.2,377.3 L256,318 L167.8,377.3 L197.0,275.2 L113.3,209.6 L219.6,205.8 Z"/>
+</svg>

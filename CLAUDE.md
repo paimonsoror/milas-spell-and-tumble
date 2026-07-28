@@ -115,6 +115,11 @@ is what got retired here, deliberately.
 Chrome, Edge, or Safari are needed for read-aloud; the game detects a missing
 Web Speech API and flashes the word on screen instead.
 
+**It's installable.** Once a permanent build step existed, the natural next
+step was making the game a real installable PWA rather than just a hosted
+page — see "PWA installability" below for the manifest/service-worker/icon
+details.
+
 **Version.** `APP_VERSION` (`js/app.js`, top of file) is still a hand-bumped
 string — there's now a build step, but still no git-derived or CI-derived
 build number wired up to replace it, so it remains the one manual signal for
@@ -122,7 +127,10 @@ build number wired up to replace it, so it remains the one manual signal for
 screen and again in the Grown-Ups dashboard's Settings tab. Bump it whenever
 you ship a change worth being able to tell apart from the last one; it's
 unrelated to `SAVE_VERSION` in `js/store.js`, which versions the save-file
-*shape*, not the code.
+*shape*, not the code. `sw.js`'s own `CACHE_NAME` version string is a second,
+separate manual bump with the same reasoning — see "PWA installability"
+below — worth doing in the same commit as an `APP_VERSION` bump so an old
+cached bundle doesn't linger on installed devices.
 
 ## Layout
 
@@ -138,8 +146,10 @@ unrelated to `SAVE_VERSION` in `js/store.js`, which versions the save-file
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
 | `js/store.js` | localStorage persistence, profiles, stats, custom word lists |
 | `js/app.js` | Screens, game loop, avatar studio, coach's voice, grown-ups dashboard |
-| `build.js` | esbuild config — bundles `js/app.js` (which imports everything else) into `dist/game.js` |
-| `server/` | Cross-device sync backend, authoritative (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`). |
+| `build.js` | esbuild config — bundles `js/app.js` (which imports everything else) into `dist/game.js`, and rasterizes `assets/icon.svg` into `dist/icons/*.png` (via `sharp`, the one runtime-adjacent devDependency this needs) |
+| `assets/icon.svg` | The one hand-authored image asset in the repo — source for the PWA's home-screen icon. See "PWA installability" below for why it's simple/flat rather than a render of the `Gymnast` rig. |
+| `manifest.webmanifest`, `sw.js` | PWA installability — see "PWA installability" below. Both are plain static files at repo root, not part of the esbuild bundle. |
+| `server/` | Cross-device sync backend, authoritative (Node.js + SQLite, zero npm deps) — see `docs/HANDOFF-ARCHITECTURE.md`. Also serves the hidden `/admin` operator page (`server/admin.html`), which now includes a session-history trend chart — see "Session-trend chart" below. |
 
 `js/*.js` are ES modules with an explicit dependency graph now, not
 load-order-dependent globals: `words.js`, `letters.js`, `language.js`,
@@ -403,16 +413,20 @@ opened this up during the graphics pass (`docs/HANDOFF-UI.md` §9) — real
 image/SVG asset files are now allowed, since a Docker-built, `nginx`-served
 folder tree still works exactly the same double-clickable, offline way even
 with an `assets/`-style subfolder of local files, as long as nothing fetches
-from a network. Nothing added any, though: every graphics improvement in that
-pass was achievable with existing inline SVG plus new CSS custom properties,
-so there was no concrete reason to add a file yet. **Update, later pass:**
-"no build step" also stopped being an invariant once the game was deployed
-to Kubernetes for good (see "Running it" above) — there's now an esbuild
-step, deliberately, by the project owner's own call. What's still hard: no
-CDN, no third-party network fetch, and no child-identifying data leaving the
-household's own infrastructure (`docs/HANDOFF-ARCHITECTURE.md` §8.2) — the
-build step and the sync server are both self-hosted, not outsourced to
-someone else's cloud.
+from a network. Nothing added any at the time: every graphics improvement in
+that pass was achievable with existing inline SVG plus new CSS custom
+properties, so there was no concrete reason to add a file yet.
+**Update, later pass:** "no build step" also stopped being an invariant once
+the game was deployed to Kubernetes for good (see "Running it" above) —
+there's now an esbuild step, deliberately, by the project owner's own call.
+**Update, one pass later still:** `assets/icon.svg` is the first file
+actually added under that door — the PWA installability pass needed a home-
+screen icon and had a concrete reason to add exactly one asset file (see
+"PWA installability" below). What's still hard: no CDN, no third-party
+network fetch, and no child-identifying data leaving the household's own
+infrastructure (`docs/HANDOFF-ARCHITECTURE.md` §8.2) — the build step and
+the sync server are both self-hosted, not outsourced to someone else's
+cloud.
 
 **Cross-device sync is whole-snapshot and timestamp-wins, on purpose.** A single
 child can't play on two devices at the same instant, so a real conflict between
@@ -501,6 +515,55 @@ visible from the existing admin page rather than needing a new one.
 no automated restore path, deliberately, since an untested one-click restore
 button is worse than a documented manual step that's actually been tried at
 this scale.
+
+**PWA installability — a simple hand-authored icon, not a render of the
+avatar rig.** `Gymnast` (`js/avatar.js`) has no function that renders a
+static frame to a string — it only ever mutates a live `<svg>` element via
+DOM APIs — so building a whole render pipeline just to extract one icon
+would have been a disproportionate side-project. `assets/icon.svg` (a
+purple square, a white star — stars being the actual core currency of this
+game) is a new, small, hand-authored asset instead, rasterized by `build.js`
+via `sharp` into `dist/icons/*.png` at the sizes Android's manifest and
+iOS's `apple-touch-icon` each expect. It's a **full-bleed square with no
+pre-rounded corners or transparency**, deliberately — both platforms apply
+their own corner/shape mask on top, and pre-rounding fights that; the star
+sits inside Android's maskable safe zone so the same file serves both
+`any` and `maskable` purposes. `sw.js` (repo root, not under `dist/`, so its
+default scope covers the whole site) precaches the built assets and serves
+them stale-while-revalidate — instant and offline-capable, refetching in
+the background to stay current. It explicitly leaves `/api/*` alone, so
+sync/backup traffic always hits the network live rather than risking a
+stale cached response. iOS has no programmatic install prompt (unlike
+Android's automatic banner) — Safari's Share → "Add to Home Screen" is the
+only path, so a small dismissible hint appears in the Grown-Ups dashboard's
+Settings tab (`shouldShowIosInstallHint()`/`renderSettingsTab()` in
+`js/app.js`) when `navigator.standalone` says the app isn't installed yet.
+Its dismissed-state is a plain `localStorage` key, not part of `Store`'s
+synced save file — it's about this browser, not this child, and installing
+on one device shouldn't silently mark the hint dismissed on another.
+
+**Session-trend chart — one real chart, in two places that can't share a
+module.** The Grown-Ups dashboard's Progress tab used to show two separate
+CSS-div bar charts on fixed windows (last 24 sessions, last 10 weeks); the
+admin page (`/admin`) showed no chart at all, despite already receiving the
+same session history (`stats.sessions`, capped at 250 by
+`Store.recordSession()`) inside every synced snapshot — no new schema or
+sync plumbing was needed for either surface. Both now render the same small
+hand-rolled SVG line chart (no charting library) with a 4-weeks/12-weeks/
+all-time range selector, charting **accuracy** (correct/total) rather than
+competition `score` — score is competition-only and stays `0` in practice
+mode, so plotting it against practice sessions on the same axis would be
+misleading (`Store.sessionTrend()`'s own comment explains this). Hover
+detail is a native SVG `<title>` per point, the same technique the bars it
+replaced already used via the HTML `title` attribute, rather than a bespoke
+crosshair/tooltip layer. `server/admin.html` and `js/app.js` are separate
+deployables (`server/` is never part of the client bundle — see the Layout
+table) and can't literally share an ES module, so the bucketing function
+(`Store.sessionTrend()` in `js/store.js`, tested in `tests/check.js` the
+same way `selectReviewPool()` was pulled out for testability) and the chart
+renderer are each duplicated as a small, self-contained copy in
+`server/admin.html`'s own inline script — a deliberate, tiny exception to
+"don't duplicate code," not an oversight.
 
 **Phonics-pattern grouping lives in source comments, not per-word metadata.**
 `js/words.js` groups each grade's words into named clusters (e.g. g3's

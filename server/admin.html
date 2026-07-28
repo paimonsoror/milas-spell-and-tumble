@@ -66,6 +66,24 @@
   #detail-header { display: flex; justify-content: space-between; align-items: baseline; }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
+
+  .trend-range { display: flex; gap: 8px; margin: 4px 0 12px; }
+  .trend-range button.active { background: #0b5fbf; color: #fff; border-color: #0b5fbf; }
+  .trend-chart { width: 100%; height: 140px; display: block; }
+  .trend-grid { stroke: #e1e3e6; stroke-width: 1; }
+  .trend-axis { fill: #666; font-size: 10px; }
+  .trend-area { fill: #0b5fbf; opacity: 0.12; stroke: none; }
+  .trend-line { fill: none; stroke: #0b5fbf; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .trend-dot { fill: #0b5fbf; }
+  .trend-pt:hover .trend-dot { r: 6; }
+  @media (prefers-color-scheme: dark) {
+    .trend-range button.active { background: #7fb8ff; color: #16181c; border-color: #7fb8ff; }
+    .trend-grid { stroke: #333; }
+    .trend-axis { fill: #9aa0a8; }
+    .trend-area { fill: #7fb8ff; opacity: 0.15; }
+    .trend-line { stroke: #7fb8ff; }
+    .trend-dot { fill: #7fb8ff; }
+  }
 </style>
 </head>
 <body>
@@ -111,6 +129,7 @@
         <h2 id="detail-title"></h2>
         <button id="detail-close">Close</button>
       </div>
+      <div id="detail-chart"></div>
       <div id="detail-tree"></div>
     </div>
   </div>
@@ -141,6 +160,100 @@
   }
   function fmtPct(v) {
     return v == null ? "—" : Math.round(v * 100) + "%";
+  }
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  /* Same shape as Store.sessionTrend() in js/store.js — duplicated rather
+     than imported, since this page is a separate deployable with no build
+     step (see CLAUDE.md's Layout table / docs/HANDOFF-ARCHITECTURE.md §11).
+     Accuracy (correct/total) is the metric, not score, which is
+     competition-only and stays 0 in practice mode. */
+  function sessionTrend(sessions, rangeDays) {
+    const cutoff = rangeDays ? Date.now() - rangeDays * 86400000 : 0;
+    return (sessions || [])
+      .filter((s) => s.ts >= cutoff)
+      .map((s) => ({
+        ts: s.ts,
+        accuracy: s.total ? s.correct / s.total : 0,
+        listLabel: s.listLabel,
+        score: s.score || 0,
+        medal: s.medal || null
+      }))
+      .sort((a, b) => a.ts - b.ts);
+  }
+
+  /* Same small hand-rolled SVG line chart as the Grown-Ups dashboard's
+     Progress tab (js/app.js's renderTrendChart) — one real chart approach,
+     used in both places, even though the two pages can't share a module. */
+  function renderTrendChart(points) {
+    const W = 600, H = 140, padL = 34, padR = 10, padT = 10, padB = 20;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const minTs = points[0].ts, maxTs = points[points.length - 1].ts;
+    const span = Math.max(1, maxTs - minTs);
+    const x = (ts) => padL + (points.length > 1 ? ((ts - minTs) / span) * plotW : plotW / 2);
+    const y = (a) => padT + (1 - a) * plotH;
+
+    const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.ts).toFixed(1)},${y(p.accuracy).toFixed(1)}`).join(" ");
+    const baseY = (padT + plotH).toFixed(1);
+    const areaPath = `${linePath} L${x(maxTs).toFixed(1)},${baseY} L${x(minTs).toFixed(1)},${baseY} Z`;
+
+    const dots = points
+      .map((p) => {
+        const cx = x(p.ts).toFixed(1), cy = y(p.accuracy).toFixed(1);
+        const when = new Date(p.ts).toLocaleDateString();
+        const scoreLabel = p.score ? ` · score ${p.score.toFixed(1)}` : "";
+        const medalLabel = p.medal ? ` · ${p.medal}` : "";
+        return `<g class="trend-pt">
+          <circle cx="${cx}" cy="${cy}" r="9" fill="transparent"></circle>
+          <circle class="trend-dot" cx="${cx}" cy="${cy}" r="4"></circle>
+          <title>${when} · ${fmtPct(p.accuracy)} · ${escapeHtml(p.listLabel || "")}${scoreLabel}${medalLabel}</title>
+        </g>`;
+      })
+      .join("");
+
+    const firstLabel = new Date(minTs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const lastLabel = new Date(maxTs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const midY = (padT + plotH / 2).toFixed(1);
+
+    return `
+      <svg class="trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Accuracy over time, from ${firstLabel} to ${lastLabel}">
+        <line x1="${padL}" y1="${padT}" x2="${W - padR}" y2="${padT}" class="trend-grid"></line>
+        <line x1="${padL}" y1="${midY}" x2="${W - padR}" y2="${midY}" class="trend-grid"></line>
+        <line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}" class="trend-grid"></line>
+        <text x="2" y="${Number(padT) + 4}" class="trend-axis">100%</text>
+        <text x="2" y="${Number(midY) + 4}" class="trend-axis">50%</text>
+        <text x="2" y="${Number(baseY) + 4}" class="trend-axis">0%</text>
+        <path d="${areaPath}" class="trend-area"></path>
+        <path d="${linePath}" class="trend-line"></path>
+        ${dots}
+        <text x="${padL}" y="${H - 4}" class="trend-axis">${firstLabel}</text>
+        <text x="${W - padR}" y="${H - 4}" class="trend-axis" text-anchor="end">${lastLabel}</text>
+      </svg>`;
+  }
+
+  let trendRangeDays = 28;
+  let currentSessions = [];
+
+  function renderTrendSection() {
+    const points = sessionTrend(currentSessions, trendRangeDays);
+    const ranges = [[28, "4 weeks"], [84, "12 weeks"], [0, "All time"]];
+    const pills = ranges
+      .map(([days, label]) => `<button type="button" data-range="${days}" class="${(trendRangeDays || 0) === days ? "active" : ""}">${label}</button>`)
+      .join("");
+    $("#detail-chart").innerHTML = `
+      <div class="trend-range">${pills}</div>
+      ${points.length ? renderTrendChart(points) : '<div class="muted">No sessions recorded yet.</div>'}
+    `;
+    $$("[data-range]", $("#detail-chart")).forEach((btn) =>
+      btn.addEventListener("click", () => {
+        trendRangeDays = Number(btn.dataset.range) || null;
+        renderTrendSection();
+      })
+    );
   }
 
   async function api(path, opts) {
@@ -257,6 +370,11 @@
     const res = await api("/api/admin/profiles/" + encodeURIComponent(code));
     const data = await res.json();
     $("#detail-title").textContent = code;
+
+    currentSessions = (!data.parseError && data.profile.stats && data.profile.stats.sessions) || [];
+    trendRangeDays = 28;
+    renderTrendSection();
+
     const tree = $("#detail-tree");
     tree.innerHTML = "";
     tree.appendChild(data.parseError ? renderLeaf("(unreadable snapshot)") : renderJsonTree(data.profile, null));
