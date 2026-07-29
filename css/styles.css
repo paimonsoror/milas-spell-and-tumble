@@ -786,6 +786,48 @@ input[type="text"].spell-input.shake { animation: shake .4s ease; }
 
 .mouth-icon { width: 56px; height: auto; }
 
+/* ---------- story spelling (docs/HANDOFF-PARAGRAPH.md) ----------
+   Reuses .arena/.spell/.letter-boxes/.spell-input-row/.feedback/.mc-choices
+   wholesale — same visual language as the single-word spelling screen, just
+   a paragraph of reading material above the input instead of one bare word.
+   Only the story text itself and its blank markers are genuinely new. */
+
+.para-mat { fill: var(--arena-floor-bottom); }
+
+.para-text-card { margin-bottom: 14px; }
+.para-story-label {
+  font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ink-soft); margin-bottom: 6px;
+}
+.para-story-text {
+  font-size: clamp(17px, 2.4vw, 22px);
+  line-height: 1.75;
+  color: var(--ink);
+}
+.para-blank {
+  display: inline-block;
+  min-width: 64px;
+  text-align: center;
+  border-radius: 6px;
+  padding: 0 6px;
+  font-weight: bold;
+  border-bottom: 3px solid var(--line);
+}
+/* an upcoming blank reads as a plain blank line, never a hint about length */
+.para-blank.upcoming { color: var(--ink-soft); opacity: .5; letter-spacing: .1em; }
+.para-blank.active {
+  border-bottom-color: var(--purple);
+  background: #f3e8ff;
+  color: var(--purple-deep);
+  animation: pulse 1.4s ease infinite;
+}
+.para-blank.filled {
+  border-bottom-color: var(--green);
+  background: #dcfce7;
+  color: #15803d;
+  font-family: var(--font-letters);
+}
+
 /* ---------- parent dashboard ---------- */
 
 .stat-grid {

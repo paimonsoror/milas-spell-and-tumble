@@ -6,6 +6,9 @@ import {
   PRONOUN_BY_ID, spokenPronounPrompt, SOUND_PAIR_BY_ID, resolveSoundItem,
   mouthShapeIcon, shuffleLanguageItems
 } from "./language.js";
+import {
+  PASSAGE_LISTS, passageSegments, pickPassages, buildBlankQueue, allBlankWords
+} from "./passages.js";
 import { CATALOG, SKIN_TONES, poseFrom, buildThumbnail, Gymnast } from "./avatar.js";
 import { SKILLS, SKILL_BY_ID, skillsForSport, chooseSkill, Animator } from "./skills.js";
 import { VOICE_PRESETS, VOICE_PRESET_BY_ID, Speaker, Sfx } from "./audio.js";
@@ -33,9 +36,15 @@ let home = null;    // { gymnast, animator } — the home-screen greeter, see re
 let resultsGymnast = null; // plain Gymnast, no Animator — renderResults() poses her once statically
 let lettersArena = null; // { gymnast, animator } — the early-learner track's own stage, see startLetterRound()
 let languageArena = null; // { gymnast, animator } — "Language Play", see startLanguageRound() (HANDOFF-SPEECH-AND-LANGUAGE.md)
+let paraArena = null; // { gymnast, animator } — "Story Spelling", see startParagraphSession() (HANDOFF-PARAGRAPH.md)
 let session = null;
 let letterSession = null;
 let languageSession = null;
+let paragraphSession = null;
+// which activity's routine last called finishRoutine() — read by the results
+// screen's "Again!" button, since #screen-results is shared by both
+let lastFinishedActivity = "spelling";
+let lastParaMode = "practice"; // remembered for "Again!" on the results screen
 let newProfileStage = "speller"; // set by the picker in renderProfiles(), read when a profile is created
 let parentsUnlocked = false;
 // true only in the ?code=XXXXXX remote-view boot path (see initRemoteView) —
@@ -58,12 +67,14 @@ window.__app = {
   submitAnswer, showScreen, refreshHome, startSession, advance,
   startLetterRound, currentLetterItem, finishLetterRound, renderParents,
   announceSkill,
+  startParagraphSession, advanceParaBlank,
   setParentsUnlocked: (v) => { parentsUnlocked = v; },
   get arena() { return arena; },
   get studio() { return studio; },
   get session() { return session; },
   get letterSession() { return letterSession; },
   get languageSession() { return languageSession; },
+  get paragraphSession() { return paragraphSession; },
   get sfx() { return sfx; },
   get speaker() { return speaker; }
 };
@@ -125,6 +136,20 @@ async function init() {
   languageArena.gymnast.setLook(Store.data.look);
   languageArena.animator.idle();
 
+  // Story Spelling (docs/HANDOFF-PARAGRAPH.md) shares the speller track's
+  // full chooseSkill() pool, streak escalation included — unlike the
+  // explorer-track stages above it is NOT locked in place, so it needs the
+  // same travel bounds as the main arena for travelling skills to land
+  // correctly. It skips that arena's crowd/judges/banner scenery only
+  // because the story text needs the screen space; the competition
+  // spectacle itself (judges revealing scores) still happens on the shared
+  // Results screen.
+  const pG = new Gymnast($("#para-gymnast"), { x: 350, y: 251, zoom: 1.2 });
+  paraArena = { gymnast: pG, animator: new Animator(pG, { min: 170, max: 530 }) };
+  paraArena.gymnast.setLook(Store.data.look);
+  paraArena.animator.onSkillStart = (skill) => announceSkill(skill, $("#para-skill-name"));
+  paraArena.animator.idle();
+
   // cropped waist-up on purpose — a full standing figure at this card's size
   // makes her face illegibly tiny (HANDOFF-UI.md §5.4), so this trades the
   // feet out of frame for a face that actually reads
@@ -143,6 +168,7 @@ async function init() {
   wireStudio();
   wireLetters();
   wireLanguage();
+  wireParagraph();
   wireVoice();
   wireProfiles();
   wireParents();
@@ -205,6 +231,7 @@ function applyProfileSettings() {
   if (studio) studio.gymnast.setLook(Store.data.look);
   if (lettersArena) lettersArena.gymnast.setLook(Store.data.look);
   if (languageArena) languageArena.gymnast.setLook(Store.data.look);
+  if (paraArena) paraArena.gymnast.setLook(Store.data.look);
   document.title = `${Store.data.name}'s Spell & Tumble Championship`;
   // every player keeps their own day streak, so this follows the switch —
   // but skipped for a still-unclaimed firstRun placeholder: registerVisit()
@@ -273,6 +300,7 @@ function showScreen(name) {
   if (name !== "studio") clearPreview(); // never carry a try-on out of the studio
   if (name !== "letters" && letterSession) { speaker.cancel(); letterSession = null; }
   if (name !== "language" && languageSession) { speaker.cancel(); languageSession = null; }
+  if (name !== "paragraph" && paragraphSession) { speaker.cancel(); paragraphSession = null; }
   if (name === "studio") refreshStudio();
   if (name === "home") refreshHome();
   if (name === "voice") renderVoice();
@@ -288,7 +316,13 @@ function wireNav() {
     else if (dest === "letters") startLetterRound();
     else if (dest === "language-pronoun") startLanguageRound("pronoun");
     else if (dest === "language-sound") startLanguageRound("sound");
-    else showScreen(dest);
+    else if (dest === "paragraph") {
+      startParagraphSession({
+        mode: el.dataset.paraMode || lastParaMode,
+        sport: Store.data.settings.sport,
+        grade: Store.data.settings.grade
+      });
+    } else showScreen(dest);
   });
 
   $("#btn-parents").addEventListener("click", () => {
@@ -984,6 +1018,12 @@ function wireGame() {
     finishSession();
   });
   $("#btn-again").addEventListener("click", () => {
+    // #screen-results is shared by both spelling activities (see
+    // finishRoutine()) — restart whichever one actually just finished
+    if (lastFinishedActivity === "paragraph") {
+      startParagraphSession({ mode: lastParaMode, sport: Store.data.settings.sport, grade: Store.data.settings.grade });
+      return;
+    }
     const last = Store.data.settings;
     startSession({ mode: last.mode, sport: last.sport, list: last.grade, length: last.routineLength });
   });
@@ -1253,24 +1293,577 @@ function rewardFix(word, tier) {
   setTimeout(advance, 1800);
 }
 
-function showFeedback(kind, html) {
-  const el = $("#feedback");
-  el.className = "feedback show " + kind;
-  el.innerHTML = html;
+/* ============================================================
+   Story Spelling (docs/HANDOFF-PARAGRAPH.md)
+
+   A second speller-track activity: instead of one isolated word, she reads
+   a short paragraph with blanks in it, hears each missing word spoken in
+   reading order, and types it into place. Deliberately a fork of the
+   word-mode session/screen above, not a bent version of it — `session`'s
+   phase machinery (submitAnswer/handleCorrect/promptRetry/
+   startMultipleChoice/rewardFix) is tightly wired to the #screen-game DOM
+   ids and to "one word, no surrounding text," and retrofitting a multi-blank
+   paragraph into it risked breaking the existing flow for no real savings,
+   the same reasoning startLetterRound()'s own header gives for why Letter
+   Play doesn't bend `session` either. What genuinely reuses cleanly is
+   reused directly: markLetters(), chooseSkill(), judgeScores(), medalFor(),
+   the reward/star formulas, Store.recordAttempt()/recordFixOutcome(), and —
+   via finishRoutine() above — the entire finish/results pipeline, so a
+   Story Spelling competition is judged and medaled exactly like a word one.
+   ============================================================ */
+
+const PARAGRAPH_ROUTINE_LENGTH = 3; // fixed story count for a competition routine — see HANDOFF-PARAGRAPH.md §4 for why this isn't a picker yet
+
+function getPassageList(key) {
+  return PASSAGE_LISTS[key] || PASSAGE_LISTS.g3;
 }
 
-function hideFeedback() {
-  $("#feedback").className = "feedback";
-  $("#feedback").innerHTML = "";
+function showParaFeedback(kind, html) {
+  showFeedback(kind, html, $("#para-feedback"));
+}
+function hideParaFeedback() {
+  hideFeedback($("#para-feedback"));
 }
 
-function announceSkill(skill) {
+function startParagraphSession(cfg) {
+  const list = getPassageList(cfg.grade);
+  const isComp = cfg.mode === "competition";
+  const initial = pickPassages(list.passages, isComp ? PARAGRAPH_ROUTINE_LENGTH : 2);
+  const queue = buildBlankQueue(initial);
+
+  paragraphSession = {
+    mode: cfg.mode,
+    sport: cfg.sport,
+    gradeKey: cfg.grade,
+    gradeLabel: list.label,
+    listKey: "para:" + cfg.grade,
+    listLabel: list.label + " Stories",
+    list,
+    passages: initial,
+    queue,
+    index: 0,
+    // a short custom grade could in principle be smaller than the routine —
+    // mirrors buildQueue()'s own comment for word mode
+    total: isComp ? queue.length : 0,
+    correct: 0,
+    wrong: 0,
+    hints: 0,
+    hintedWords: 0,
+    score: 0,
+    stars: 0,
+    streak: 0,
+    bestStreak: 0,
+    marks: [],
+    results: [],
+    // filled-in blanks so far, keyed "passageIndex:blankIndex" -> the word —
+    // read by renderParagraph() to show an answered blank in place instead
+    // of a line, whatever passage is currently on screen
+    answered: {},
+    lastSkillId: null,
+    startTs: Date.now(),
+    phase: "idle",
+    hintLevel: 0,
+    wordStart: 0,
+    tries: 0,
+    usedHint: false
+  };
+  lastParaMode = cfg.mode;
+
+  $("#phud-progress-wrap").style.display = isComp ? "" : "none";
+  $("#btn-para-quit").textContent = isComp ? "Give up" : "Finish";
+  paraArena.gymnast.setLook(Store.data.look);
+  paraArena.animator.reset();
+  showScreen("paragraph");
+
+  if (!speaker.supported) {
+    showParaFeedback("bad", "This browser can't read words out loud, so the missing word will flash in the story instead. Watch closely!");
+  }
+  sfx.whistle();
+  setTimeout(() => nextParaBlank(), 700);
+}
+
+/* Practice mode is open-ended, same as word mode's currentWord(): once the
+   queue runs out, pick a couple more passages and keep going rather than
+   ending the session. buildBlankQueue()'s startIndex keeps passageIndex
+   correct across the extension instead of restarting from 0. */
+function currentParaBlank() {
+  const s = paragraphSession;
+  if (s.mode === "practice" && s.index >= s.queue.length) {
+    const more = pickPassages(s.list.passages, 2);
+    const startIndex = s.passages.length;
+    s.passages = s.passages.concat(more);
+    s.queue = s.queue.concat(buildBlankQueue(more, startIndex));
+  }
+  return s.queue[s.index];
+}
+
+function nextParaBlank() {
+  const s = paragraphSession;
+  if (s.mode === "competition" && s.index >= s.total) {
+    finishParagraphSession();
+    return;
+  }
+  const cur = currentParaBlank();
+  s.phase = "spelling";
+  s.hintLevel = 0;
+  s.tries = 0;
+  s.wordStart = performance.now();
+  s.usedHint = false;
+
+  hideParaFeedback();
+  $("#para-mc-choices").innerHTML = "";
+  $("#para-mc-choices").style.display = "none";
+  $("#para-form").style.display = "";
+  $("#para-input").value = "";
+  $("#para-input").disabled = false;
+  $("#btn-para-submit").disabled = false;
+  $("#btn-para-submit").textContent = "Spell it! ✓";
+  $("#btn-para-hint").disabled = false;
+  $("#btn-para-hint").textContent = "💡 Hint";
+  renderParagraph();
+  renderParaBoxes();
+  updateParaHud();
+  $("#para-hint").innerHTML = "Listen, then type the missing word.";
+  $("#para-input").focus();
+
+  if (Store.data.settings.autoSpeak) speakParaCurrent();
+  if (!speaker.supported || !speaker.enabled) revealParaWordBriefly(cur.word);
+}
+
+/* The one way to move to the next blank — mirrors advance()'s own comment:
+   every path that can end a blank funnels through here and it no-ops once
+   a blank has already been left. */
+function advanceParaBlank() {
+  if (!paragraphSession) return;
+  if (paragraphSession.phase !== "reveal" && paragraphSession.phase !== "fixing") return;
+  paragraphSession.phase = "advancing";
+  paragraphSession.index++;
+  nextParaBlank();
+}
+
+/* Only the missing word is spoken, never a surrounding sentence the way
+   word mode's speaker.prompt(word, sentence) reads one — the paragraph
+   itself is her sentence context, already on screen. sentence=null already
+   makes prompt() skip the sentence half of its cadence on its own. */
+function speakParaCurrent(opts) {
+  speaker.prompt(currentParaBlank().word, null, opts || {});
+}
+
+function revealParaWordBriefly(word) {
+  const hint = $("#para-hint");
+  const original = hint.innerHTML;
+  hint.innerHTML = `Missing word: <em style="font-size:1.5em;letter-spacing:.1em">${escapeHtml(word)}</em>`;
+  setTimeout(() => {
+    if (paragraphSession && paragraphSession.phase === "spelling") hint.innerHTML = original;
+  }, 2600);
+}
+
+/* Renders the current passage with each blank in one of three states:
+   already answered (her correct word, in place, so the paragraph keeps
+   reading naturally), the one active blank (audible + typeable), or an
+   upcoming blank (a plain blank line) — always in reading order, only one
+   active at a time, exactly per the feature brief. */
+function renderParagraph() {
+  const s = paragraphSession;
+  const cur = currentParaBlank();
+  const passage = s.passages[cur.passageIndex];
+  const segs = passageSegments(passage);
+  let html = "";
+  for (const seg of segs) {
+    if (seg.type === "text") {
+      html += escapeHtml(seg.value);
+      continue;
+    }
+    const key = cur.passageIndex + ":" + seg.index;
+    if (key in s.answered) {
+      html += `<span class="para-blank filled">${escapeHtml(s.answered[key])}</span>`;
+    } else if (seg.index === cur.blankIndex) {
+      html += `<span class="para-blank active" id="para-active-blank">_____</span>`;
+    } else {
+      html += `<span class="para-blank upcoming">_____</span>`;
+    }
+  }
+  $("#para-text").innerHTML = html;
+
+  const storyNum = cur.passageIndex + 1;
+  $("#para-story-label").textContent =
+    `${s.gradeLabel} · Story ${storyNum}${s.mode === "competition" ? ` of ${s.passages.length}` : ""}`;
+}
+
+function renderParaBoxes(opts) {
+  const o = opts || {};
+  const word = currentParaBlank().word;
+  const typed = ($("#para-input").value || "").toLowerCase();
+  const box = $("#para-boxes");
+  const showSlots = Store.data.settings.letterBoxes || o.marks;
+
+  if (!showSlots) {
+    box.innerHTML = typed
+      .split("")
+      .map((ch) => `<span class="lb filled">${escapeHtml(ch)}</span>`)
+      .join("");
+    return;
+  }
+
+  const len = Math.max(word.length, typed.length);
+  let html = "";
+  for (let i = 0; i < len; i++) {
+    let cls = "lb";
+    let ch = "";
+    if (o.marks) {
+      ch = typed[i] || "";
+      cls += o.marks[i] === true ? " ok" : o.marks[i] === false ? " bad" : "";
+    } else if (typed[i]) {
+      ch = typed[i];
+      cls += " filled";
+    } else if (i < paragraphSession.hintLevel && word[i]) {
+      ch = word[i];
+      cls += " filled";
+    }
+    html += `<span class="${cls}">${escapeHtml(ch)}</span>`;
+  }
+  box.innerHTML = html;
+}
+
+function updateParaHud() {
+  const s = paragraphSession;
+  $("#phud-score").textContent = s.score;
+  $("#phud-stars").textContent = Store.data.stars;
+  const pill = $("#phud-streak");
+  pill.textContent = `Streak ${s.streak}`;
+  pill.classList.toggle("hot", s.streak >= 3);
+  if (s.mode === "competition") {
+    $("#phud-progress").textContent = `${Math.min(s.index + 1, s.total)}/${s.total}`;
+  }
+  const dots = s.marks
+    .slice(-14)
+    .map((m) => `<i class="${m === "ok" ? "on" : m === "fixed" ? "fixed" : "learning"}"></i>`)
+    .join("");
+  $("#phud-dots").innerHTML = dots;
+  paintGoal($("#phud-goal"), { compact: true });
+}
+
+function wireParagraph() {
+  $("#para-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitParaAnswer();
+  });
+  $("#para-input").addEventListener("input", () => {
+    if (paragraphSession && paragraphSession.phase === "spelling") renderParaBoxes();
+  });
+  $("#btn-para-say").addEventListener("click", () => {
+    if (!paragraphSession) return;
+    if (paragraphSession.phase === "spelling") speakParaCurrent();
+    else speaker.say(currentParaBlank().word);
+  });
+  $("#btn-para-slow").addEventListener("click", () => {
+    if (!paragraphSession) return;
+    speaker.prompt(currentParaBlank().word, null, { slow: true, wordOnly: true });
+  });
+  $("#btn-para-hint").addEventListener("click", useParaHint);
+  $("#btn-para-quit").addEventListener("click", () => {
+    if (paragraphSession && paragraphSession.mode === "competition" && paragraphSession.index < paragraphSession.total) {
+      if (!confirm("Leave the competition early? Your routine won't be scored.")) return;
+      paragraphSession = null;
+      speaker.cancel();
+      showScreen("home");
+      return;
+    }
+    finishParagraphSession();
+  });
+}
+
+function useParaHint() {
+  if (!paragraphSession || paragraphSession.phase !== "spelling") return;
+  const word = currentParaBlank().word;
+  if (paragraphSession.hintLevel >= word.length - 1) {
+    speaker.spellOut(word);
+    return;
+  }
+  paragraphSession.hintLevel++;
+  paragraphSession.hints++;
+  paragraphSession.usedHint = true;
+  sfx.star();
+  renderParaBoxes();
+  const shown = word.slice(0, paragraphSession.hintLevel);
+  $("#para-hint").innerHTML = `It starts with <em>${escapeHtml(shown.toUpperCase())}</em> …`;
+  if (paragraphSession.hintLevel >= word.length - 1) $("#btn-para-hint").textContent = "🔡 Spell it out";
+}
+
+function submitParaAnswer() {
+  if (!paragraphSession) return;
+  if (paragraphSession.phase !== "spelling") return;
+
+  const s = paragraphSession;
+  const word = currentParaBlank().word;
+  const typed = $("#para-input").value.trim().toLowerCase();
+  if (!typed) {
+    $("#para-input").focus();
+    return;
+  }
+
+  const ms = performance.now() - s.wordStart;
+  const right = typed === word.toLowerCase();
+  s.tries++;
+  speaker.cancel();
+
+  if (s.tries === 1) {
+    Store.recordAttempt(word, right, ms, s.usedHint);
+    s.marks.push(right ? "ok" : "learning");
+    s.results.push({ word, typed, right, ms, hint: s.usedHint });
+    if (s.usedHint) s.hintedWords++;
+  }
+
+  const marks = markLetters(word, typed);
+  renderParaBoxes({ marks });
+
+  if (right && s.tries === 1) {
+    s.phase = "reveal";
+    $("#btn-para-submit").disabled = true;
+    $("#btn-para-hint").disabled = true;
+    handleParaCorrect(word);
+  } else if (right) {
+    $("#btn-para-submit").disabled = true;
+    $("#btn-para-hint").disabled = true;
+    rewardParaFix(word, "retried");
+  } else if (s.tries === 1) {
+    handleParaFirstMiss(word);
+  } else if (s.tries === 2) {
+    promptParaRetry(word, 1);
+  } else {
+    startParaMultipleChoice(word);
+  }
+
+  updateParaHud();
+}
+
+function handleParaCorrect(word) {
+  const s = paragraphSession;
+  s.correct++;
+  s.streak++;
+  s.bestStreak = Math.max(s.bestStreak, s.streak);
+
+  const solo = !s.usedHint;
+  const streakBonus = Math.min(s.streak, 6) * 2;
+  const points = 10 + streakBonus + (solo ? 2 : 0);
+  s.score += points;
+
+  let stars = 2;
+  if (solo) stars += 1;
+  const streakStar = s.streak > 0 && s.streak % 5 === 0;
+  if (streakStar) stars += 3;
+  s.stars += stars;
+  Store.addStars(stars);
+
+  // fill the blank in place right away so the story keeps reading naturally
+  // while she reads the reward feedback below it
+  const cur = s.queue[s.index];
+  s.answered[cur.passageIndex + ":" + cur.blankIndex] = word;
+  renderParagraph();
+
+  sfx.correct();
+  paraArena.gymnast.setExpression("excited");
+
+  const skill = chooseSkill(s.sport, s.streak, s.lastSkillId);
+  s.lastSkillId = skill.id;
+
+  const who = escapeHtml(playerName());
+  const cheers = ["Perfect!", "Yes!", "Nailed it!", "Beautiful!", "That's it!", "Wow!", "Stuck the landing!"];
+  const named = [`Perfect, ${who}!`, `Go ${who}!`, `${who}, that was beautiful!`, `Nice one, ${who}!`];
+  const cheer =
+    s.correct % 3 === 0
+      ? named[Math.floor(Math.random() * named.length)]
+      : cheers[Math.floor(Math.random() * cheers.length)];
+
+  const why = [
+    solo ? "+1 ⭐ for doing it all by yourself" : null,
+    streakStar ? `+3 ⭐ for ${s.streak} in a row` : null
+  ].filter(Boolean).join(" · ");
+
+  showParaFeedback(
+    "good",
+    `<b>${cheer}</b> ${escapeHtml(word)} — ⭐ +${stars}, ${points} points.<br>
+     ${why ? `<span class="why">${why}</span><br>` : ""}
+     <span class="muted">${escapeHtml(skill.name)}${s.streak >= 3 ? ` · ${s.streak} in a row!` : ""}</span>
+     <div class="row" style="margin-top:10px"><button class="btn small teal" id="btn-para-next">Next word →</button></div>`
+  );
+  $("#btn-para-next").addEventListener("click", advanceParaBlank);
+
+  if (skill.difficulty >= 4) sfx.whoosh();
+  paraArena.animator.play(skill).then(() => {
+    if (!paragraphSession || paragraphSession.phase !== "reveal") return;
+    sfx.crowd(1.1, Math.min(1.4, 0.6 + skill.difficulty * 0.16));
+    if (skill.difficulty >= 3) burstConfetti(skill.difficulty >= 5 ? 40 : 22, $("#para-fx-layer"));
+    paraArena.gymnast.setExpression("happy");
+    setTimeout(advanceParaBlank, 550);
+  });
+}
+
+function handleParaFirstMiss(word) {
+  const s = paragraphSession;
+  s.wrong++;
+  s.streak = 0;
+  if (s.mode === "competition") s.score = Math.max(0, s.score - 2);
+  promptParaRetry(word, 2);
+}
+
+function promptParaRetry(word, triesLeft) {
+  sfx.wrong();
+  paraArena.gymnast.setExpression("oops");
+  paraArena.animator.play(SKILL_BY_ID.wobble).then(() => paraArena.gymnast.setExpression("focused"));
+
+  const who = escapeHtml(playerName());
+  const kind = [
+    "So close — check the highlighted letters.",
+    `Good try, ${who}! A couple of letters need another look.`,
+    "Almost! Green is right, red needs work.",
+    `Nice effort, ${who} — try it once more.`
+  ];
+
+  showParaFeedback(
+    "bad",
+    `<b>${kind[Math.floor(Math.random() * kind.length)]}</b><br>
+     <span class="muted">${triesLeft} ${triesLeft === 1 ? "try" : "tries"} left.</span>
+     <div class="row" style="margin-top:10px">
+       <button class="btn small ghost" id="btn-para-hear-letters">🔡 Hear it again</button>
+       <button class="btn small ghost" id="btn-para-skip">Skip ahead →</button>
+     </div>`
+  );
+
+  $("#btn-para-hear-letters").addEventListener("click", () => speaker.say(word));
+  $("#btn-para-skip").addEventListener("click", () => {
+    paragraphSession.phase = "reveal";
+    advanceParaBlank();
+  });
+
+  $("#para-input").value = "";
+  $("#para-input").disabled = false;
+  $("#btn-para-submit").disabled = false;
+  $("#para-input").classList.add("shake");
+  setTimeout(() => $("#para-input").classList.remove("shake"), 420);
+  $("#para-input").focus();
+}
+
+/* The 3rd miss — recognition instead of recall, same last-scaffold shape as
+   word mode's startMultipleChoice(). Distractors are drawn from every blank
+   word in the grade's whole passage list (allBlankWords()), not just the
+   handful in this routine, so a short routine still has enough of them. */
+function startParaMultipleChoice(word) {
+  const s = paragraphSession;
+  s.phase = "multipleChoice";
+
+  sfx.wrong();
+  paraArena.gymnast.setExpression("oops");
+  paraArena.animator.play(SKILL_BY_ID.wobble).then(() => paraArena.gymnast.setExpression("focused"));
+
+  $("#para-form").style.display = "none";
+  $("#btn-para-hint").disabled = true;
+
+  const others = allBlankWords(s.list).filter((w) => w !== word);
+  const options = shuffle([word, ...shuffle(others).slice(0, 3)]);
+
+  showParaFeedback("bad", `<b>Let's pick it together!</b><br><span class="muted">Tap the way you hear it spelled.</span>`);
+
+  const box = $("#para-mc-choices");
+  box.style.display = "";
+  box.innerHTML = options
+    .map((opt) => `<button class="mc-option" data-word="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`)
+    .join("");
+  $$(".mc-option", box).forEach((btn) => btn.addEventListener("click", () => pickParaChoice(word, btn)));
+
+  setTimeout(() => speaker.say(word), 400);
+}
+
+function pickParaChoice(word, btnEl) {
+  const s = paragraphSession;
+  if (!s || s.phase !== "multipleChoice") return;
+  const box = $("#para-mc-choices");
+  $$(".mc-option", box).forEach((b) => (b.disabled = true));
+
+  const chosen = btnEl.dataset.word;
+  const right = chosen === word;
+  btnEl.classList.add(right ? "mc-right" : "mc-wrong");
+  if (!right) {
+    const correctBtn = box.querySelector(`.mc-option[data-word="${word}"]`);
+    if (correctBtn) correctBtn.classList.add("mc-right");
+  }
+
+  speaker.cancel();
+  if (right) {
+    rewardParaFix(word, "multipleChoice");
+  } else {
+    Store.recordFixOutcome(word, "unresolved");
+    paraArena.gymnast.setExpression("focused");
+    speaker.spellOut(word);
+    // she never leaves a passage with a permanently broken blank — fill it
+    // with the correct word anyway so the story still reads naturally once
+    // she moves past it, the one place this ladder needs to diverge from
+    // word mode's (there, each word is independent; here the blank stays
+    // visible on screen for the rest of the story)
+    const cur = s.queue[s.index];
+    s.answered[cur.passageIndex + ":" + cur.blankIndex] = word;
+    renderParagraph();
+    showParaFeedback(
+      "bad",
+      `<b>The word was <span class="answer">${escapeHtml(word)}</span></b><br>
+       <span class="muted">You'll see it again soon.</span>
+       <div class="row" style="margin-top:10px"><button class="btn small teal" id="btn-para-next">Next word →</button></div>`
+    );
+    $("#btn-para-next").addEventListener("click", advanceParaBlank);
+    s.phase = "reveal";
+    setTimeout(advanceParaBlank, 2200);
+  }
+  updateParaHud();
+}
+
+/* Shared "she got there in the end" reward — mirrors rewardFix() exactly,
+   plus filling the blank in place (see handleParaCorrect()'s own comment). */
+function rewardParaFix(word, tier) {
+  const s = paragraphSession;
+  Store.recordFixOutcome(word, tier);
+  sfx.star();
+  Store.addStars(1);
+  s.stars += 1;
+  if (s.marks.length) s.marks[s.marks.length - 1] = "fixed";
+
+  const cur = s.queue[s.index];
+  s.answered[cur.passageIndex + ":" + cur.blankIndex] = word;
+  renderParagraph();
+
+  paraArena.gymnast.setExpression("happy");
+  paraArena.animator.play(SKILL_BY_ID.salute);
+  showParaFeedback(
+    "good",
+    `<b>Now you've got it!</b> ⭐ +1 for learning it.
+     <div class="row" style="margin-top:10px"><button class="btn small teal" id="btn-para-next">Next word →</button></div>`
+  );
+  s.phase = "reveal";
+  $("#btn-para-next").addEventListener("click", advanceParaBlank);
+  setTimeout(advanceParaBlank, 1800);
+}
+
+/* `el` defaults to the word-mode game screen's own feedback box; Story
+   Spelling passes its own (#para-feedback) so the two screens' panels never
+   fight over the same DOM node — see showParaFeedback()/hideParaFeedback(). */
+function showFeedback(kind, html, el) {
+  const target = el || $("#feedback");
+  target.className = "feedback show " + kind;
+  target.innerHTML = html;
+}
+
+function hideFeedback(el) {
+  const target = el || $("#feedback");
+  target.className = "feedback";
+  target.innerHTML = "";
+}
+
+function announceSkill(skill, el) {
   if (!skill || !skill.name || skill.difficulty === 0) return;
-  const el = $("#skill-name");
-  el.textContent = skill.name + " " + "⭐".repeat(Math.max(1, skill.difficulty));
-  el.classList.remove("show");
-  void el.offsetWidth;
-  el.classList.add("show");
+  const target = el || $("#skill-name");
+  target.textContent = skill.name + " " + "⭐".repeat(Math.max(1, skill.difficulty));
+  target.classList.remove("show");
+  void target.offsetWidth;
+  target.classList.add("show");
 }
 
 function burstConfetti(n, container) {
@@ -1317,14 +1910,24 @@ function medalFor(score) {
   return { tier: "ribbon", icon: "🎀", title: "Participation Ribbon" };
 }
 
-function finishSession() {
-  if (!session) { showScreen("home"); return; }
+/* Shared by both spelling activities' finishing flow — the word-by-word
+   game screen and Story Spelling (docs/HANDOFF-PARAGRAPH.md) end their
+   routine into the exact same judging/results pipeline rather than each
+   inventing its own, since both hand this the same session shape (`mode`,
+   `sport`, `listKey`/`listLabel`, `correct`/`wrong`/`hints`/`hintedWords`/
+   `bestStreak`/`startTs`/`stars`/`results`). `activity` is carried onto the
+   recorded summary purely as a display/future-dashboard tag — nothing here
+   reads it back, and `sessionTrend()` ignores fields it doesn't know about,
+   so this is a safe additive field for old saves. `clearFn` nulls out
+   whichever module-level session variable actually owns `s`, since that's
+   the one thing the two callers can't share. */
+function finishRoutine(s, activity, clearFn) {
   speaker.cancel();
-  const s = session;
+  lastFinishedActivity = activity;
   const attempted = s.correct + s.wrong;
 
   if (attempted === 0) {
-    session = null;
+    clearFn();
     showScreen("home");
     return;
   }
@@ -1336,6 +1939,7 @@ function finishSession() {
     sport: s.sport,
     listKey: s.listKey,
     listLabel: s.listLabel,
+    activity,
     total: attempted,
     correct: s.correct,
     hints: s.hints,
@@ -1369,9 +1973,19 @@ function finishSession() {
 
   Store.recordSession(summary);
   renderResults(s, summary, judges, medal);
-  session = null;
+  clearFn();
   showScreen("results");
   Store.reconcileSync(); // fire-and-forget, see initRemoteView()'s comment
+}
+
+function finishSession() {
+  if (!session) { showScreen("home"); return; }
+  finishRoutine(session, "spelling", () => { session = null; });
+}
+
+function finishParagraphSession() {
+  if (!paragraphSession) { showScreen("home"); return; }
+  finishRoutine(paragraphSession, "paragraph", () => { paragraphSession = null; });
 }
 
 function renderResults(s, summary, judges, medal) {

@@ -731,6 +731,103 @@ for (let i = 1; i < gradeKeys.length; i++) {
     `${cur}'s average word length (${avgLenByGrade[cur].toFixed(1)}) exceeds ${prev}'s (${avgLenByGrade[prev].toFixed(1)})`);
 }
 
+/* ---- Story Spelling content & helpers (docs/HANDOFF-PARAGRAPH.md) ----
+   Mirrors the word-content checks above: structural guarantees about the
+   authored passages (blank markers resolve, ids are unique, blank words are
+   real words, difficulty climbs by grade) plus behavioural checks on the
+   pure queue-building helpers a session actually plays through. */
+{
+  const allPassageIds = new Set();
+  let passageCount = 0, totalBlanks = 0;
+  const missingMarker = [], idDupes = [], badBlankWord = [];
+  const avgBlanksByGrade = {};
+
+  for (const key of ctx.PASSAGE_GRADE_ORDER) {
+    const list = ctx.PASSAGE_LISTS[key];
+    ok(list && list.passages.length >= 6, `${key} has enough passages (got ${list ? list.passages.length : 0})`);
+    ok(typeof list.label === "string" && list.label.length > 0, `${key} has a label`);
+
+    let totalBlanksInGrade = 0;
+    for (const p of list.passages) {
+      passageCount++;
+      if (allPassageIds.has(p.id)) idDupes.push(p.id);
+      allPassageIds.add(p.id);
+
+      const markerCount = (p.text.match(/\{blank\}/g) || []).length;
+      if (markerCount !== p.blanks.length) missingMarker.push(`${p.id}: ${markerCount} markers vs ${p.blanks.length} blanks`);
+      ok(p.blanks.length >= 3, `${p.id} has at least 3 blanks (got ${p.blanks.length})`);
+
+      const sentenceCount = (p.text.match(/[.!?]+/g) || []).length;
+      ok(sentenceCount >= 3 && sentenceCount <= 5, `${p.id} has 3-5 sentences (got ${sentenceCount})`);
+
+      for (const w of p.blanks) {
+        if (!/^[a-z]+$/.test(w)) badBlankWord.push(`${p.id}: "${w}"`);
+      }
+
+      const segs = ctx.passageSegments(p);
+      const blankSegs = segs.filter((s) => s.type === "blank");
+      ok(blankSegs.length === p.blanks.length, `${p.id}'s parsed segments have one blank per {blank} marker`);
+      blankSegs.forEach((seg, i) => {
+        ok(seg.index === i, `${p.id} blank segment ${i} keeps reading order`);
+        ok(seg.word === p.blanks[i], `${p.id} blank segment ${i} resolves to the right word`);
+      });
+      ok(ctx.passageBlankCount(p) === p.blanks.length, `${p.id}: passageBlankCount matches blanks.length`);
+
+      totalBlanks += p.blanks.length;
+      totalBlanksInGrade += p.blanks.length;
+    }
+    avgBlanksByGrade[key] = totalBlanksInGrade / list.passages.length;
+  }
+
+  ok(missingMarker.length === 0, `every passage's {blank} markers match its blanks array (mismatches: ${missingMarker.join(", ")})`);
+  ok(idDupes.length === 0, `every passage id is unique (dupes: ${idDupes.join(", ")})`);
+  ok(badBlankWord.length === 0, `every blank word is a plain lowercase word (bad: ${badBlankWord.join(", ")})`);
+
+  // blank count per passage should climb gently with grade, the same
+  // difficulty-proxy reasoning as WORD_LISTS' average word length above
+  for (let i = 1; i < ctx.PASSAGE_GRADE_ORDER.length; i++) {
+    const prev = ctx.PASSAGE_GRADE_ORDER[i - 1], cur = ctx.PASSAGE_GRADE_ORDER[i];
+    ok(avgBlanksByGrade[cur] > avgBlanksByGrade[prev],
+      `${cur}'s average blanks/passage (${avgBlanksByGrade[cur].toFixed(2)}) exceeds ${prev}'s (${avgBlanksByGrade[prev].toFixed(2)})`);
+  }
+
+  /* ---- pure helpers ---- */
+  const g3 = ctx.PASSAGE_LISTS.g3;
+
+  const shuffled = ctx.shufflePassages(g3.passages);
+  ok(shuffled.length === g3.passages.length, "shufflePassages preserves length");
+  ok(g3.passages.every((p) => shuffled.includes(p)), "shufflePassages doesn't drop or invent passages");
+
+  const picked = ctx.pickPassages(g3.passages, 4);
+  ok(picked.length === 4, "pickPassages returns the requested count");
+  ok(new Set(picked).size === 4, "pickPassages doesn't repeat a passage before the pool is exhausted");
+
+  const bigPick = ctx.pickPassages(g3.passages, g3.passages.length + 3);
+  ok(bigPick.length === g3.passages.length + 3, "pickPassages can exceed the pool size by reshuffling");
+
+  const queue = ctx.buildBlankQueue(picked);
+  const expectedLen = picked.reduce((n, p) => n + p.blanks.length, 0);
+  ok(queue.length === expectedLen, `buildBlankQueue flattens every blank across the passages (got ${queue.length}, wanted ${expectedLen})`);
+  let inOrder = true;
+  for (let i = 1; i < queue.length; i++) {
+    if (queue[i].passageIndex < queue[i - 1].passageIndex) inOrder = false;
+    if (queue[i].passageIndex === queue[i - 1].passageIndex && queue[i].blankIndex < queue[i - 1].blankIndex) inOrder = false;
+  }
+  ok(inOrder, "buildBlankQueue keeps reading order: passage by passage, blank by blank");
+  ok(queue.every((b) => b.word && b.passageId), "every queued blank carries its target word and source passage id");
+
+  const offsetQueue = ctx.buildBlankQueue(picked.slice(0, 1), 2);
+  ok(offsetQueue.every((b) => b.passageIndex === 2), "buildBlankQueue's startIndex offsets passageIndex for a practice-mode extension");
+
+  const words = ctx.allBlankWords(g3);
+  ok(words.length > 0, "allBlankWords finds at least one word");
+  ok(new Set(words).size === words.length, "allBlankWords returns distinct words, not one entry per occurrence");
+  const everyBlankWord = g3.passages.flatMap((p) => p.blanks);
+  ok(everyBlankWord.every((w) => words.includes(w)), "allBlankWords includes every word actually used as a blank");
+
+  console.log(`checked ${passageCount} passages, ${totalBlanks} blanks across ${ctx.PASSAGE_GRADE_ORDER.length} grades`);
+}
+
 console.log(`\nchecked ${ctx.SKILLS.length} skills, ${wordCount} words across ${ctx.GRADE_ORDER.length} lists`);
 console.log(fails === 0 ? "ALL CHECKS PASSED" : `${fails} FAILURES`);
 process.exitCode = fails ? 1 : 0;

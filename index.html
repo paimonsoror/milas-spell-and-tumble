@@ -56,6 +56,14 @@
         <span class="emoji">🏅</span>
         <span><b>Competition</b><span>A full routine judged by three judges. Go for gold!</span></span>
       </button>
+      <button class="home-tile stage-speller" data-go="paragraph" data-para-mode="practice">
+        <span class="emoji">📖</span>
+        <span><b>Story Practice</b><span>Read a story and fill in the missing words as you hear them.</span></span>
+      </button>
+      <button class="home-tile stage-speller" data-go="paragraph" data-para-mode="competition">
+        <span class="emoji">🎖️</span>
+        <span><b>Story Competition</b><span>Fill in three whole stories for a judged score.</span></span>
+      </button>
       <button class="home-tile stage-explorer" data-go="letters">
         <span class="emoji">🔤</span>
         <span><b>Letter Play</b><span>Find the letter, then watch her fly!</span></span>
@@ -387,6 +395,56 @@
     </div>
 
     <div class="letters-summary" id="language-summary" style="display:none"></div>
+  </div>
+</section>
+
+<!-- ============================ STORY SPELLING (docs/HANDOFF-PARAGRAPH.md) ============================ -->
+<section class="screen" id="screen-paragraph">
+  <div class="hud">
+    <div class="hud-stat"><span class="k">Score</span><span class="v" id="phud-score">0</span></div>
+    <div class="hud-stat"><span class="k">Stars</span><span class="v" id="phud-stars">0</span></div>
+    <div class="hud-pill" id="phud-streak">Streak 0</div>
+    <div class="streak-dots" id="phud-dots" aria-label="Your words so far"></div>
+    <div class="spacer"></div>
+    <div class="hud-stat" id="phud-progress-wrap"><span class="k">Word</span><span class="v" id="phud-progress">1/10</span></div>
+    <button class="btn small ghost" id="btn-para-quit">Finish</button>
+    <div class="hud-goal" id="phud-goal"></div>
+  </div>
+
+  <div class="arena">
+    <svg viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <rect x="40" y="312" width="620" height="46" rx="6" class="para-mat"/>
+      <rect x="0" y="358" width="700" height="22" class="arena-lip"/>
+    </svg>
+    <svg id="para-gymnast" viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice"></svg>
+    <div class="layer-fx" id="para-fx-layer"></div>
+    <div class="skill-name" id="para-skill-name"></div>
+  </div>
+
+  <div class="spell">
+    <div class="para-text-card">
+      <div class="para-story-label" id="para-story-label"></div>
+      <p class="para-story-text" id="para-text"></p>
+    </div>
+
+    <div class="spell-prompt">
+      <button class="btn small" id="btn-para-say">🔊 Hear it again</button>
+      <button class="btn small ghost" id="btn-para-slow">🐢 Slowly</button>
+      <button class="btn small ghost" id="btn-para-hint">💡 Hint</button>
+      <div class="spell-hint" id="para-hint"></div>
+    </div>
+
+    <div class="letter-boxes" id="para-boxes"></div>
+
+    <form class="spell-input-row" id="para-form" autocomplete="off">
+      <input type="text" class="spell-input" id="para-input"
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+             aria-label="Type the missing word">
+      <button class="btn big teal" type="submit" id="btn-para-submit">Spell it! ✓</button>
+    </form>
+
+    <div class="feedback" id="para-feedback"></div>
+    <div class="mc-choices" id="para-mc-choices" style="display:none"></div>
   </div>
 </section>
 

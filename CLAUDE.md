@@ -36,10 +36,31 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >    Latin suffixes/roots), sentences were audited against misleading
 >    homophones, and `tests/check.js` now enforces the design (no word repeats
 >    across `g1`-`g5`, no word repeats within a list, average word length
->    climbs every grade). Nobody is downstream yet — see its own §7 for the
->    two open questions it resolved (no `g1`/explorer bridge is needed, and
->    pattern clusters live as source comments, not new per-word metadata) and
->    why.
+>    climbs every grade). See its own §7 for the two open questions it
+>    resolved (no `g1`/explorer bridge is needed, and pattern clusters live as
+>    source comments, not new per-word metadata) and why. Item 5 below is now
+>    downstream of it, though it deliberately doesn't touch `js/words.js`.
+> 5. `HANDOFF-PARAGRAPH.md` — a second speller-track activity: "Story
+>    Spelling," where she reads a short gym/cheer paragraph with blanks in
+>    it, hears each missing word spoken in reading order, and types it into
+>    place. **Done.** Added `js/passages.js` (30 new, hand-authored passages
+>    across `g1`-`g5`, gym/cheer-themed like `js/words.js` but genuinely new
+>    prose, not derived from it — see that file's own header) and one new
+>    `#screen-paragraph`, reachable from two new home tiles ("Story
+>    Practice"/"Story Competition") mirroring the existing Practice
+>    Gym/Competition pair. Deliberately forks the word-by-word teaching-
+>    moment ladder (three tries → multiple-choice fallback) into its own
+>    functions rather than bending `session`'s — the same call
+>    `HANDOFF-EARLY-LEARNER.md` made for Letter Play — but genuinely reuses
+>    `markLetters()`, `chooseSkill()`, `judgeScores()`, `medalFor()`, and,
+>    via a new shared `finishRoutine()`, the entire finish/results pipeline,
+>    so a Story Spelling competition is judged and medaled exactly like a
+>    word one on the same `#screen-results`. No new profile field: blank-word
+>    accuracy rides on the same `Store.data.stats.words` word-mode already
+>    uses, on purpose. Its own §7/§8 record what's open: no length/grade
+>    picker screen yet (grade rides on `settings.grade`, routine length is a
+>    fixed 3 stories), and Grown-Ups dashboard visibility beyond the raw
+>    `summary.activity` tag is deferred to a future pass.
 >
 > Running **in parallel** to the content chain above, since it's an
 > infrastructure question, not a gameplay one:
@@ -136,11 +157,12 @@ cached bundle doesn't linger on installed devices.
 
 | File | Responsibility |
 |---|---|
-| `index.html` | All nine screens as `<section class="screen">`, plus the arena scenery SVG |
+| `index.html` | All eleven screens as `<section class="screen">`, plus the arena scenery SVG |
 | `css/styles.css` | Everything visual. No framework. |
 | `js/words.js` | 261 words across grades 1–5 + a gym/cheer list, each with a sentence — a designed curriculum organized into phonics/morphology clusters, see `docs/HANDOFF-CURRICULUM.md` |
 | `js/letters.js` | The "explorer" track's content — 26 letters (name + sound clue) — and its pure helpers (`nextLetterLevel`, `chooseOptionCount`, `selectLetterPool`). Separate from `js/words.js` on purpose; see `docs/HANDOFF-EARLY-LEARNER.md`. |
 | `js/language.js` | The explorer track's second activity set — pronoun-case sentences (she/her, he/him, they/them) and "th"/"f" minimal-pair words, plus their pure selection helpers and the inline-SVG mouth-shape icon. Separate from `js/letters.js`/`WORD_LISTS` on purpose; see `docs/HANDOFF-SPEECH-AND-LANGUAGE.md`. |
+| `js/passages.js` | "Story Spelling" — the speller track's second activity: 30 new gym/cheer paragraphs across `g1`-`g5`, each with `{blank}`-marked missing words, plus the pure helpers that parse a passage and build a session's blank queue (`passageSegments`, `pickPassages`, `buildBlankQueue`, `allBlankWords`). Genuinely new prose, not derived from `js/words.js`; see `docs/HANDOFF-PARAGRAPH.md`. |
 | `js/avatar.js` | The jointed SVG figure (`Gymnast`), the unlock catalog, pose helpers |
 | `js/skills.js` | Skill keyframe data + the `Animator` that tweens between poses |
 | `js/audio.js` | `Speaker` (Web Speech) and `Sfx` (synthesised WebAudio), voice presets |
@@ -153,16 +175,18 @@ cached bundle doesn't linger on installed devices.
 
 `js/*.js` are ES modules with an explicit dependency graph now, not
 load-order-dependent globals: `words.js`, `letters.js`, `language.js`,
-`avatar.js`, and `audio.js` are leaves (no imports of their own); `skills.js`
-imports from `avatar.js`; `store.js` imports from `avatar.js`/`letters.js`/
-`language.js`/`words.js`; `app.js` imports from all of the above. `build.js`
-bundles from `app.js` as the single entry point. `tests/check.js` bundles a
-separate small entry (`tests/testEntry.js`, a barrel re-exporting the 6
-non-DOM files) since it needs those exports without `audio.js`/`app.js`'s
-DOM dependency — see "Testing" below.
+`passages.js`, `avatar.js`, and `audio.js` are leaves (no imports of their
+own); `skills.js` imports from `avatar.js`; `store.js` imports from
+`avatar.js`/`letters.js`/`language.js`/`words.js` (not `passages.js` — see
+`docs/HANDOFF-PARAGRAPH.md` for why Story Spelling needed no new save-file
+bucket); `app.js` imports from all of the above. `build.js` bundles from
+`app.js` as the single entry point. `tests/check.js` bundles a separate
+small entry (`tests/testEntry.js`, a barrel re-exporting the 7 non-DOM
+files) since it needs those exports without `audio.js`/`app.js`'s DOM
+dependency — see "Testing" below.
 
 `js/app.js` exposes a deliberate, minimal `window.__app` surface (`Store`,
-`arena`, `session`, a handful of functions) purely for
+`arena`, `session`, `paragraphSession`, a handful of functions) purely for
 `tests/screenshots.js` to drive — now that app.js's top-level bindings are
 module-scoped rather than implicit page globals, this is how a test harness
 still reaches in. Nothing else should read or write `window.__app`; it's a
@@ -627,6 +651,80 @@ crowd member) instead of carrying a second, separate copy of the palette in
 JS. A future re-theme is a `:root` edit and nothing else — no more "chrome
 changed, arena didn't."
 
+**Story Spelling's blank marker is positional (`{blank}`), not numbered.**
+`js/passages.js`'s passages could have used `{0}`/`{1}` placeholders keyed
+into the `blanks` array by index, but with 30 hand-authored passages to
+write, the one thing worth optimising away was "keep two parallel lists of
+numbers in sync by hand." Every `{blank}` token instead resolves to
+`blanks[i]` by its left-to-right occurrence order, and `passageSegments()`
+is the one parser both the renderer and `tests/check.js` share, so there is
+exactly one place that understands the token.
+
+**A Story Spelling "routine" is measured in whole stories, not raw blank
+count.** `routineLength` for word-mode competition (6/10/16) counts words
+because every word is a self-contained unit. A paragraph isn't: cutting a
+passage off mid-blank to hit an exact blank-count target would leave a
+half-finished sentence on screen at the end of a routine, which reads as
+broken rather than deliberately finished. `PARAGRAPH_ROUTINE_LENGTH`
+(`js/app.js`, currently a fixed `3`) instead counts whole passages, each
+played to its natural end — see `docs/HANDOFF-PARAGRAPH.md` §4 for why this
+is a constant today rather than a picker like word-mode's setup screen.
+
+**Story Spelling forks the teaching-moment ladder instead of bending
+`session`'s.** Three tries then a multiple-choice fallback, non-punitive
+tone throughout, streak resets only on the first miss, hints always
+free — every rule from "Missing a word is a teaching moment, not a
+penalty" above applies per blank exactly as it does per word, but the
+implementation is a parallel set of functions (`submitParaAnswer()`,
+`handleParaCorrect()`, `promptParaRetry()`, `startParaMultipleChoice()`,
+`rewardParaFix()`) targeting `#screen-paragraph`'s own DOM ids, not a mode
+flag threaded through `submitAnswer()` and friends. That mirrors
+`startLetterRound()`'s own reasoning for why Letter Play doesn't bend
+`session` either — retrofitting a multi-blank paragraph into machinery
+built around "one word, no surrounding text" risked breaking the existing
+flow players already trust. What's shared is whatever genuinely fits as-is:
+`markLetters()`, `chooseSkill()`, the reward/star formulas, and — via a new
+`finishRoutine(s, activity, clearFn)` both `finishSession()` and
+`finishParagraphSession()` call — the entire judging/results pipeline,
+`judgeScores()` included, so a Story Spelling competition is scored and
+medaled exactly like a word one on the one shared `#screen-results`.
+
+**A resolved-by-giving-up blank still gets filled in.** Word mode's
+multiple-choice fallback simply reveals the answer and moves on, because
+each word is independent. A Story Spelling blank stays visible on screen
+for the rest of that passage, so `pickParaChoice()`'s wrong-pick branch
+writes the correct word into `answered` (and re-renders) even when she
+never actually typed or tapped it correctly — otherwise the story would be
+left with a permanently broken blank line for every blank she didn't solve.
+
+**Blank-word accuracy rides on the exact same `Store.data.stats.words`
+word-mode already writes to — no new per-profile bucket.** Both activities
+ask her to spell real words from memory, so `Store.recordAttempt()`/
+`recordFixOutcome()` are called identically from both; a word she misses in
+a story is exactly as "hard" to `Store.selectReviewPool()` next time she
+plays word-mode, and vice versa. This was a genuine "can the existing shape
+represent this" check, not a default: the alternative (a separate
+`storySpelling` stats bucket, following `earlyLearner`'s precedent) would
+have fragmented one child's word-level progress across two views of the
+same underlying skill for no real benefit, since — unlike the explorer
+track — both activities are the same reading age, the same recall
+mechanic, and the same curriculum. Session-level summaries (medals, best
+score, `stats.sessions`) are likewise one shared pool, not split by
+activity; `finishRoutine()` tags each recorded session with `activity:
+"spelling"` or `"paragraph"` purely as a display hint for a future
+dashboard pass, unread by any game logic today.
+
+**No dedicated setup screen for Story Spelling.** Word-mode's `#screen-setup`
+exists because it has three independently meaningful per-session choices
+(sport, grade, routine length). Story Spelling only varies mode
+(practice/competition), which its two home tiles already encode directly —
+so it follows Letter Play/Language Play's precedent (jump straight from the
+home tile into the activity) rather than inventing a picker screen for a
+single remaining choice. Grade and sport ride on the exact same
+`settings.grade`/`settings.sport` she already set for word-mode, deliberately
+not a second, independent "current level" concept. `docs/HANDOFF-PARAGRAPH.md`
+§8 flags a length/grade picker as open work if that turns out to matter.
+
 ## Testing
 
 ```
@@ -638,9 +736,9 @@ npm run typecheck            # tsc --noEmit over js/*.js via JSDoc + checkJs; no
 
 `tests/check.js` needs `dist/game.js` to not exist for it to still work — it doesn't
 run the bundle at all. Instead it bundles its **own** small entry
-(`tests/testEntry.js`, which re-exports everything from the 6 non-DOM files:
-`words.js`, `letters.js`, `language.js`, `avatar.js`, `skills.js`, `store.js`)
-via esbuild into an IIFE exposing a `TestCore` global, then runs that inside
+(`tests/testEntry.js`, which re-exports everything from the 7 non-DOM files:
+`words.js`, `letters.js`, `language.js`, `passages.js`, `avatar.js`, `skills.js`,
+`store.js`) via esbuild into an IIFE exposing a `TestCore` global, then runs that inside
 a `vm` context with a stubbed `localStorage` and a **hand-cranked frame
 clock**, so the `Animator` can be driven deterministically without a DOM.
 This replaced an older trick (concatenating those 6 files as classic scripts
