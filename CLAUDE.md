@@ -62,6 +62,24 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >    fixed 3 stories), and Grown-Ups dashboard visibility beyond the raw
 >    `summary.activity` tag is deferred to a future pass.
 >
+> 6. `HANDOFF-ELEVATION.md` — a live-play review of the deployed game
+>    (graphics, UX, and educational value), plus the ranked brief for the
+>    next elevation pass. **Review done; first elevation pass shipped.** An
+>    agent played the production deployment end-to-end and recorded
+>    verified strengths, verified defects (a viewport-fit problem on both
+>    game screens, an input-not-locked-during-reveal bug, the Story
+>    screen's bare arena, intermittent transition freezes), and ranked
+>    graphics + educational elevation plans. A later pass worked that
+>    ranking and recorded exactly what it did in its own **§9**: the
+>    viewport and input-lock defects are fixed, Story Spelling has a real
+>    stage (a reading corner, not a clone of the competition arena), the
+>    crowd and judges react to what she lands, and — the flagship —
+>    `js/words.js`'s phonics clusters were promoted from source comments to
+>    real `patterns` data so a missed word gets one line of actual
+>    instruction on its retry card. Read §9.5 before picking anything else
+>    up: the intermittent freezes are still undiagnosed, and §5.5, §5.7,
+>    §6.2, §6.3, §6.4 and §6.7 are untouched with their rankings intact.
+>
 > Running **in parallel** to the content chain above, since it's an
 > infrastructure question, not a gameplay one:
 >
@@ -159,7 +177,7 @@ cached bundle doesn't linger on installed devices.
 |---|---|
 | `index.html` | All eleven screens as `<section class="screen">`, plus the arena scenery SVG |
 | `css/styles.css` | Everything visual. No framework. |
-| `js/words.js` | 261 words across grades 1–5 + a gym/cheer list, each with a sentence — a designed curriculum organized into phonics/morphology clusters, see `docs/HANDOFF-CURRICULUM.md` |
+| `js/words.js` | 261 words across grades 1–5 + a gym/cheer list, each with a sentence — a designed curriculum organized into phonics/morphology clusters, see `docs/HANDOFF-CURRICULUM.md`. Those clusters are now real `patterns` data on each list object, plus the `patternFor`/`patternHint` lookup the retry card's lesson line reads |
 | `js/letters.js` | The "explorer" track's content — 26 letters (name + sound clue) — and its pure helpers (`nextLetterLevel`, `chooseOptionCount`, `selectLetterPool`). Separate from `js/words.js` on purpose; see `docs/HANDOFF-EARLY-LEARNER.md`. |
 | `js/language.js` | The explorer track's second activity set — pronoun-case sentences (she/her, he/him, they/them) and "th"/"f" minimal-pair words, plus their pure selection helpers and the inline-SVG mouth-shape icon. Separate from `js/letters.js`/`WORD_LISTS` on purpose; see `docs/HANDOFF-SPEECH-AND-LANGUAGE.md`. |
 | `js/passages.js` | "Story Spelling" — the speller track's second activity: 30 new gym/cheer paragraphs across `g1`-`g5`, each with `{blank}`-marked missing words, plus the pure helpers that parse a passage and build a session's blank queue (`passageSegments`, `pickPassages`, `buildBlankQueue`, `allBlankWords`). Genuinely new prose, not derived from `js/words.js`; see `docs/HANDOFF-PARAGRAPH.md`. |
@@ -337,7 +355,13 @@ letters green/wrong in place (`markLetters()` + `.lb.ok`/`.lb.bad` in
 point is to keep her recalling it, not copying it. Only after the third miss
 does it fall back to a multiple-choice pick (`startMultipleChoice()`) as a
 last scaffold, which is also the first moment the correct spelling appears on
-screen. Streak resets on the *first* miss only — a second or third try that
+screen. Two later additions sharpen the moment without changing the ladder:
+the retry card's opener now varies by *how close she got* (`retryOpener()` —
+"So close" is only said when it's true; a wholly wrong attempt gets "listen
+for the very first sound" instead), and a classified word gets one line of
+real instruction under it (`patternLessonHtml()`, see the phonics-pattern
+entry below). The lesson's worked examples are drawn from other words sharing
+the pattern, never the word itself, so the card still doesn't leak the answer. Streak resets on the *first* miss only — a second or third try that
 also misses doesn't pile on. Getting there on try 2, try 3, or the
 multiple-choice pick all pay the same modest "+1 ⭐ for learning it"
 (`rewardFix()`); only a clean first try pays the full points/streak/skill
@@ -589,18 +613,38 @@ renderer are each duplicated as a small, self-contained copy in
 `server/admin.html`'s own inline script — a deliberate, tiny exception to
 "don't duplicate code," not an oversight.
 
-**Phonics-pattern grouping lives in source comments, not per-word metadata.**
-`js/words.js` groups each grade's words into named clusters (e.g. g3's
-prefixes → suffixes → doubled consonants → silent letters → soft c/g), but the
-`[word, sentence]` tuple itself never grew a `pattern` field. Two reasons:
-`buildQueue()`/`shuffle()` (`js/app.js`) draw from a whole list at random, so
-cluster order is invisible in an actual session — there is no in-game
-mechanism a pattern tag would currently feed. And the setup screen only lets a
-parent pick a whole grade, never a sub-pattern, so there's no UI to expose one
-either. If a future dashboard feature wants to target a specific pattern
-(`HANDOFF-PARENTS.md` §8 sketches `Store.selectReviewPool()` as the extension
-point), add the metadata then, onto the list object rather than the tuple —
-don't carry it speculatively today.
+**Phonics-pattern grouping is real data now — on the list, never on the
+tuple.** This entry used to say the clusters lived only in `js/words.js`'s
+source comments, because nothing in the game could use one, and that a
+future feature needing them should add the metadata *then*, onto the list
+object rather than the `[word, sentence]` tuple. That happened
+(`docs/HANDOFF-ELEVATION.md` §6.1): each `g1`-`g5` list now carries
+`patterns: [{ id, label, tip, words }]`, and a missed word gets one line of
+instruction on its retry card — "**Digraphs** — Two letters, one sound: sh,
+ch, th and wh each make a single sound. Like *shop* and *that*." The tuple
+still never grew a field, exactly as called.
+
+Three things worth knowing before editing it. **The lookup is global**
+(`patternFor`/`patternHint` in `js/words.js`), not scoped to the list being
+played: a word lands in exactly one of `g1`-`g5` (already enforced) so it's
+unambiguous, and it means Story Spelling's blank words — which come from
+`js/passages.js` and belong to no `WORD_LISTS` list — get the same lesson
+for free. **`bonus` is deliberately unclassified**, being sport vocabulary
+chosen for meaning rather than a phonics-designed list; unclassified words
+return null and the retry card degrades to what it always showed, which is
+also what happens for a grown-up's custom list. And **the word membership is
+duplicated** between `words` and `patterns[].words` on purpose —
+`tests/check.js` asserts every `g1`-`g5` word is in exactly one pattern and
+that no pattern invents a word its list doesn't have, so adding a word
+without classifying it fails the build rather than silently shipping a
+child a missing or wrong lesson.
+
+Still true: `buildQueue()`/`shuffle()` draw from a whole list at random and
+the setup screen only picks a whole grade, so **cluster order remains
+invisible in a session** and there is still no way to practise one pattern
+on purpose. `HANDOFF-PARENTS.md` §8's `Store.selectReviewPool()` sketch is
+still the extension point if that's ever wanted — the data it would need
+now exists.
 
 **There is no `g1`/explorer bridge list, on purpose.** `HANDOFF-EARLY-LEARNER.md`
 flagged a gap between the explorer track's top level (matching a letter to a
@@ -641,6 +685,39 @@ keeps the centered `<h1>` centered while leaving room on the right so a long
 player name doesn't run underneath her — removing the padding without also
 hiding her would let "Firstname Lastname's Spell & Tumble Championship" wrap
 under her face at in-between widths.
+
+**The arena sizes itself off the viewport's height, not just its width.**
+`.arena` used to be `width: 100%` plus `aspect-ratio: 700/380`, which on a
+639px-tall laptop made the stage so tall that the gymnast and the answer box
+were never on screen together — she had to scroll between watching the reward
+and typing, which is the one loop the whole game is built on
+(`docs/HANDOFF-ELEVATION.md` §4.2). It now caps `--arena-h` against `dvh` and
+derives `max-width` from that, so the box shrinks *whole* rather than being
+cropped by its own `preserveAspectRatio="slice"`; width is still the binding
+constraint on narrow/tall screens, where the arena was never the problem.
+`#screen-paragraph` overrides `--arena-h` tighter, because that screen also
+carries a paragraph of reading material and there the story text — not the
+figure — is what has to stay co-visible with the input.
+
+Its companion: `showFeedback()` scrolls a **"bad"** card into view, since the
+feedback panel sits below all of that and the retry card (with its pattern
+lesson) would otherwise land under the fold on exactly the screens the sizing
+fix was for. Only "bad" — a correct answer's card stays put on purpose,
+because the payoff there is watching her perform and scrolling away would
+take it off screen.
+
+**Story Spelling has its own stage, not a recolour of the arena.** The
+screen shipped with a bare mat on a flat void (`HANDOFF-PARAGRAPH.md` scoped
+graphics out; §4.1/§5.1 of the elevation review called the bill due). Rather
+than clone the competition arena, `#screen-paragraph` is a reading corner
+that happens to be in a gym — bookshelf, floor lamp, mats stacked like
+cushions, bunting, a STORY TIME banner, no crowd — so the two speller-track
+activities read as different *places* rather than one place with different
+text under it. Same discipline as the arena though: every colour is a class
+routed through a `--story-*` block in `:root`, and her floor contact stays at
+`y=312` so the shared `Gymnast`/`Animator` setup needed no per-screen tuning.
+Because there's no crowd there, `crowdWave()`/`reactJudges()` are word-mode
+only.
 
 **Arena colours route through `:root`, all the way this time.** The SVG's
 gradient stops and flat fills carry classes styled from `--arena-*`/
@@ -711,8 +788,35 @@ track — both activities are the same reading age, the same recall
 mechanic, and the same curriculum. Session-level summaries (medals, best
 score, `stats.sessions`) are likewise one shared pool, not split by
 activity; `finishRoutine()` tags each recorded session with `activity:
-"spelling"` or `"paragraph"` purely as a display hint for a future
-dashboard pass, unread by any game logic today.
+"spelling"` or `"paragraph"`.
+
+**Update, later pass: something reads that tag now.** It shipped as a pure
+display hint for a future dashboard pass, unread by any game logic — the
+Grown-Ups dashboard's Progress tab now has a "Words vs. Stories" section
+built on it (`Store.activitySplit()`, `docs/HANDOFF-ELEVATION.md` §6.5),
+because whether spelling inside connected prose lags or leads isolated
+spelling is a genuinely diagnostic signal and the data was already being
+written. Nothing about the storage decision above changed: it's still one
+shared `stats.words`, one shared session pool, and the tag is still only
+ever *read for display* — no game logic branches on it. Two details worth
+keeping if you touch it: a session recorded before Story Spelling existed
+carries no tag at all and must count as word mode (it was), and the section
+renders nothing until she's played both, since a "no data" card beside a
+real one is noise for a household that only uses word mode.
+
+**Destructive questions use an in-design modal, not native `confirm()`.**
+`askConfirm()` (`js/app.js`) is a promise-returning dialog every "are you
+sure" in the app now goes through. Native `confirm()` hard-blocks the
+renderer — it froze the page mid-animation and mid-speech — and looks like
+an operating-system error rather than anything in this game, which is a
+jarring thing to put in front of a child on the one screen where she might
+be deleting her own progress. Defaults are deliberately safe: the
+*dismissing* button takes focus, Escape and a backdrop click both cancel,
+and `danger: true` colours the confirming button rather than the dismissing
+one. Because it's non-blocking, callers that could have their subject change
+underneath them while she decides re-check after the `await` — the two
+competition "give up" buttons re-check that the session still exists, since
+a routine can finish on its own timers mid-question.
 
 **No dedicated setup screen for Story Spelling.** Word-mode's `#screen-setup`
 exists because it has three independently meaningful per-session choices

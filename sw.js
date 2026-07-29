@@ -7,7 +7,7 @@
 // worth invalidating old caches for — there's no build-derived version here,
 // same hand-bumped convention as APP_VERSION itself, and for the same reason
 // (no build step ever generated one, and that's still true for this file).
-const CACHE_NAME = "mila-cache-v1";
+const CACHE_NAME = "mila-cache-v2";
 
 const PRECACHE_URLS = [
   "/",

@@ -722,6 +722,97 @@ ok(missingWord.length === 0, `every sentence contains its word (missing: ${missi
 ok(dupesWithinList.length === 0, `no list repeats a word (repeats: ${dupesWithinList.join(", ")})`);
 ok(crossGradeDupes.length === 0, `a word lands in exactly one grade list (conflicts: ${crossGradeDupes.join(", ")})`);
 
+/* ---- phonics patterns (docs/HANDOFF-ELEVATION.md §6.1) ----
+   The pattern clusters are duplicated data: each g1-g5 list names its words
+   twice, once in `words` and once inside a `patterns[].words`. That is a
+   deliberate trade (see js/words.js's own header) and these checks are the
+   other half of it — they're what stops the two copies drifting. Adding a
+   word without classifying it, classifying a word the list doesn't have, or
+   putting a word in two clusters all fail here rather than silently shipping
+   a wrong lesson to a child. */
+{
+  const unclassified = [], phantom = [], doubleClassified = [], thinPattern = [], badMeta = [];
+  const patternIds = new Set(), idDupes = [];
+  let patternCount = 0;
+
+  for (const key of ctx.GRADE_ORDER) {
+    const list = ctx.WORD_LISTS[key];
+    const listWords = new Set(list.words.map((p) => p[0]));
+    const claimed = new Map(); // word -> first pattern id that claimed it
+
+    // `bonus` is deliberately unclassified — sport vocabulary chosen for
+    // meaning, with no honest phonics cluster to assign it to
+    if (key === "bonus") {
+      ok(!list.patterns || list.patterns.length === 0, "the bonus list stays deliberately unclassified");
+      continue;
+    }
+
+    ok(Array.isArray(list.patterns) && list.patterns.length >= 3, `${key} has phonics patterns`);
+    for (const p of list.patterns || []) {
+      patternCount++;
+      if (patternIds.has(p.id)) idDupes.push(p.id);
+      patternIds.add(p.id);
+      if (!p.id || !p.label || !p.tip || !/[.!?]$/.test(p.tip)) badMeta.push(`${key}:${p.id}`);
+      // three words minimum so patternHint() can always offer two examples
+      // that aren't the word she just missed
+      if (p.words.length < 3) thinPattern.push(`${key}:${p.id}`);
+      for (const w of p.words) {
+        if (!listWords.has(w)) phantom.push(`${key}:${p.id}:${w}`);
+        if (claimed.has(w)) doubleClassified.push(`${key}:${w} (${claimed.get(w)} + ${p.id})`);
+        else claimed.set(w, p.id);
+      }
+    }
+    for (const w of listWords) if (!claimed.has(w)) unclassified.push(`${key}:${w}`);
+  }
+
+  ok(unclassified.length === 0, `every g1-g5 word belongs to a pattern (unclassified: ${unclassified.join(", ")})`);
+  ok(phantom.length === 0, `no pattern claims a word its list doesn't have (phantom: ${phantom.join(", ")})`);
+  ok(doubleClassified.length === 0, `no word lands in two patterns (dupes: ${doubleClassified.join(", ")})`);
+  ok(thinPattern.length === 0, `every pattern has 3+ words so examples are always available (thin: ${thinPattern.join(", ")})`);
+  ok(badMeta.length === 0, `every pattern has an id, a label and a sentence-shaped tip (bad: ${badMeta.join(", ")})`);
+  ok(idDupes.length === 0, `pattern ids are unique across every list (dupes: ${idDupes.join(", ")})`);
+
+  // the lookup the retry card actually calls, over every classified word
+  let badHint = [];
+  for (const key of ctx.GRADE_ORDER) {
+    if (key === "bonus") continue;
+    for (const [w] of ctx.WORD_LISTS[key].words) {
+      const h = ctx.patternHint(w);
+      if (!h) { badHint.push(`${w}: no hint`); continue; }
+      if (h.examples.length !== 2) badHint.push(`${w}: ${h.examples.length} examples`);
+      if (h.examples.includes(w)) badHint.push(`${w}: example is the answer`);
+      if (new Set(h.examples).size !== h.examples.length) badHint.push(`${w}: repeated example`);
+    }
+  }
+  ok(badHint.length === 0, `patternHint gives every g1-g5 word two distinct examples that aren't the answer (bad: ${badHint.slice(0, 6).join(", ")})`);
+
+  ok(ctx.patternFor("cartwheel") === null, "patternFor returns null for an unclassified word (bonus list)");
+  ok(ctx.patternHint("zzzznotaword") === null, "patternHint returns null rather than an empty shape for an unknown word");
+  ok(ctx.patternFor("MUCH") !== null, "patternFor is case-insensitive, since typed answers are lowercased late");
+
+  console.log(`checked ${patternCount} phonics patterns across ${ctx.GRADE_ORDER.length - 1} graded lists`);
+}
+
+/* ---- Words vs. Stories split (docs/HANDOFF-ELEVATION.md §6.5) ---- */
+{
+  const split = ctx.Store.activitySplit([
+    { activity: "spelling", correct: 8, total: 10 },
+    { activity: "paragraph", correct: 3, total: 6 },
+    { activity: "paragraph", correct: 3, total: 4 },
+    // recorded before Story Spelling existed, so it carries no tag at all —
+    // word mode was the only activity then, and it must count as one
+    { correct: 5, total: 10 }
+  ]);
+  ok(split.spelling.sessions === 2, "an untagged legacy session counts as word mode, not a third bucket");
+  ok(split.spelling.total === 20 && split.spelling.correct === 13, "word-mode totals add up across tagged and untagged sessions");
+  ok(split.paragraph.sessions === 2 && split.paragraph.total === 10, "story totals add up");
+  ok(Math.abs(split.paragraph.accuracy - 0.6) < 1e-9, "story accuracy is correct/total across the bucket, not an average of averages");
+
+  const empty = ctx.Store.activitySplit([]);
+  ok(empty.spelling.accuracy === 0 && empty.paragraph.accuracy === 0, "activitySplit divides safely with no sessions at all");
+  ok(ctx.Store.activitySplit(undefined).spelling.sessions === 0, "activitySplit tolerates a missing session list");
+}
+
 // average word length should climb grade over grade — a cheap, durable proxy
 // for "this is an actual difficulty progression", not just six same-sized bins
 const gradeKeys = ctx.GRADE_ORDER.filter((k) => k !== "bonus");

@@ -569,6 +569,33 @@ const Store = {
       .sort((a, b) => a.ts - b.ts);
   },
 
+  /* Splits recorded sessions by which activity produced them — word mode vs.
+     Story Spelling. finishRoutine() has been tagging every session with
+     `activity` since Story Spelling shipped, but nothing had ever read it
+     back (docs/HANDOFF-PARAGRAPH.md §8 deferred it, HANDOFF-ELEVATION.md
+     §6.5 called it in): whether spelling inside connected prose lags or
+     leads isolated spelling is a genuinely diagnostic signal for a parent,
+     and the data was already being written.
+
+     Sessions recorded before Story Spelling existed carry no `activity` at
+     all, and word mode was the only activity then — so an absent tag means
+     "spelling", not "unknown". Pure and argument-taking for the same reason
+     selectReviewPool() and sessionTrend() are. */
+  activitySplit(sessions) {
+    const bucket = () => ({ sessions: 0, correct: 0, total: 0, accuracy: 0 });
+    const out = { spelling: bucket(), paragraph: bucket() };
+    for (const s of sessions || []) {
+      const b = out[s.activity === "paragraph" ? "paragraph" : "spelling"];
+      b.sessions++;
+      b.correct += s.correct || 0;
+      b.total += s.total || 0;
+    }
+    for (const k of Object.keys(out)) {
+      out[k].accuracy = out[k].total ? out[k].correct / out[k].total : 0;
+    }
+    return out;
+  },
+
   /* ---- focus / review preferences (grown-ups dashboard) ---- */
 
   setPinned(word, mode) {

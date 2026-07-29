@@ -1,6 +1,6 @@
 /* Screens, game loop, avatar studio, and the grown-ups dashboard. */
 
-import { WORD_LISTS, GRADE_ORDER } from "./words.js";
+import { WORD_LISTS, GRADE_ORDER, patternHint } from "./words.js";
 import { LETTERS, LETTER_BY_ID, chooseOptionCount, shuffleLetters } from "./letters.js";
 import {
   PRONOUN_BY_ID, spokenPronounPrompt, SOUND_PAIR_BY_ID, resolveSoundItem,
@@ -9,7 +9,7 @@ import {
 import {
   PASSAGE_LISTS, passageSegments, pickPassages, buildBlankQueue, allBlankWords
 } from "./passages.js";
-import { CATALOG, SKIN_TONES, poseFrom, buildThumbnail, Gymnast } from "./avatar.js";
+import { CATALOG, SKIN_TONES, poseFrom, buildThumbnail, Gymnast, prefersReducedMotion } from "./avatar.js";
 import { SKILLS, SKILL_BY_ID, skillsForSport, chooseSkill, Animator } from "./skills.js";
 import { VOICE_PRESETS, VOICE_PRESET_BY_ID, Speaker, Sfx } from "./audio.js";
 import { Store, dayKey, parseWordList } from "./store.js";
@@ -22,7 +22,7 @@ import { Store, dayKey, parseWordList } from "./store.js";
    in the corner badge (index.html #app-version) and in the Grown-Ups
    dashboard's Settings tab. Not the same thing as SAVE_VERSION in store.js,
    which versions the save-file *shape*, not the code. */
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -252,6 +252,35 @@ function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+/* Five silhouettes rather than one repeated capsule (HANDOFF-ELEVATION.md
+   §5.3). Everything here is drawn relative to a spectator's own (jx, y), so
+   a variant is a few extra shapes and nothing else needs to know which one
+   it got. Kept to shapes that still read at arena scale — an 18×20 body is
+   roughly 15px on a laptop, so "arms up" and "foam finger" register as
+   silhouette differences, and anything finer would just be noise. */
+function crowdExtras(variant, jx, y, c) {
+  const head = y - 4;
+  switch (variant) {
+    case 1: // arms raised
+      return `<path d="M ${jx - 9},${y + 6} L ${jx - 14},${y - 6} M ${jx + 9},${y + 6} L ${jx + 14},${y - 6}"
+                    stroke="${c}" stroke-width="3.5" stroke-linecap="round" fill="none" opacity=".85"/>`;
+    case 2: // foam finger
+      return `<rect x="${jx + 8}" y="${head - 16}" width="6" height="16" rx="3" fill="#fbbf24" opacity=".95"/>
+              <path d="M ${jx + 6},${y + 4} L ${jx + 11},${head - 2}" stroke="${c}" stroke-width="3.5"
+                    stroke-linecap="round" opacity=".85"/>`;
+    case 3: // hair bow, like hers
+      return `<circle cx="${jx - 5}" cy="${head - 6}" r="3.4" fill="#f472b6" opacity=".95"/>
+              <circle cx="${jx + 5}" cy="${head - 6}" r="3.4" fill="#f472b6" opacity=".95"/>
+              <circle cx="${jx}" cy="${head - 6}" r="1.8" fill="#be185d" opacity=".95"/>`;
+    case 4: // pennant on a stick
+      return `<path d="M ${jx + 8},${y + 6} L ${jx + 8},${head - 14}" stroke="#78350f" stroke-width="2" opacity=".8"/>
+              <path d="M ${jx + 8},${head - 14} L ${jx + 20},${head - 10} L ${jx + 8},${head - 5} Z"
+                    fill="#34d399" opacity=".9"/>`;
+    default:
+      return "";
+  }
+}
+
 function buildCrowd() {
   const g = $("#crowd");
   const shirts = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => cssVar(`--crowd-${n}`));
@@ -265,10 +294,19 @@ function buildCrowd() {
     for (let x = 14; x < 700; x += step) {
       const jx = x + (row % 2) * 14 + Math.random() * 8 - 4;
       const c = shirts[Math.floor(Math.random() * shirts.length)];
-      const delay = (Math.random() * 2).toFixed(2);
-      out += `<g class="crowd-person" style="animation-delay:${delay}s">
+      // Both the idle bob's offset and the wave's are custom properties, not
+      // an inline `animation-delay`. An inline declaration beats any
+      // stylesheet rule, so the old version would have pinned every
+      // spectator's *wave* to its bob offset too and flattened the ripple —
+      // properties let each animation pick its own delay from CSS.
+      const bob = (Math.random() * 2).toFixed(2);
+      // the ripple travels left to right across the stands
+      const wave = ((jx / 700) * 0.85).toFixed(2);
+      const variant = Math.random() < 0.42 ? 0 : 1 + Math.floor(Math.random() * 4);
+      out += `<g class="crowd-person" style="--bob-delay:${bob}s;--wave-delay:${wave}s">
                 <rect x="${jx - 9}" y="${y}" width="18" height="20" rx="6" fill="${c}" opacity=".85"/>
                 <circle cx="${jx}" cy="${y - 4}" r="7" fill="#f8d3b8" opacity=".8"/>
+                ${crowdExtras(variant, jx, y, c)}
               </g>`;
     }
     out += `<rect x="0" y="${y + 20}" width="700" height="7" fill="${wallColor}" opacity=".85"/>`;
@@ -276,6 +314,24 @@ function buildCrowd() {
   g.innerHTML = out;
 }
 
+/* A stadium wave when she lands something hard. Pure CSS once the class is
+   on — each spectator's `--wave-delay` (set in buildCrowd) staggers it left
+   to right — so this is one class toggle, not a per-frame loop. Skipped
+   outright under reduced motion rather than left to the blanket CSS rule,
+   which would otherwise fire all 50-odd of them simultaneously at 0.01ms. */
+function crowdWave() {
+  if (prefersReducedMotion()) return;
+  const g = $("#crowd");
+  g.classList.remove("wave");
+  void g.getBoundingClientRect(); // restart the animation if one's mid-flight
+  g.classList.add("wave");
+  setTimeout(() => g.classList.remove("wave"), 1700);
+}
+
+/* The judges had no faces at all — three featureless blobs at a pink table
+   (HANDOFF-ELEVATION.md §5.4). They get eyes, a mouth with two states, and a
+   score card that raises. Which face shows is a class on #judges-table, so
+   reacting is one toggle rather than a redraw. */
 function buildJudges() {
   const g = $("#judge-heads");
   const skin = cssVar("--judge-skin");
@@ -283,11 +339,37 @@ function buildJudges() {
   g.innerHTML = [46, 89, 132]
     .map(
       (x, i) => `<g class="judge-figure" data-judge="${i}">
+        <g class="judge-card" style="--card-delay:${(i * 0.11).toFixed(2)}s">
+          <rect x="${x - 9}" y="234" width="18" height="22" rx="3" fill="#fff" opacity=".95"/>
+          <path d="M ${x},239 l 2,5.4 5.6,.5 -4.2,3.7 1.2,5.5 -4.6,-3 -4.6,3 1.2,-5.5 -4.2,-3.7 5.6,-.5 Z"
+                fill="#f59e0b"/>
+        </g>
         <circle cx="${x}" cy="266" r="9" fill="${skin}"/>
+        <circle class="judge-eye" cx="${x - 3.2}" cy="264.6" r="1.35"/>
+        <circle class="judge-eye" cx="${x + 3.2}" cy="264.6" r="1.35"/>
+        <path class="judge-mouth-calm" d="M ${x - 3},269.6 q 3,2.2 6,0" fill="none"/>
+        <ellipse class="judge-mouth-wow" cx="${x}" cy="270.2" rx="2.2" ry="2.6"/>
         <rect x="${x - 10}" y="275" width="20" height="14" rx="4" fill="${suit}"/>
       </g>`
     )
     .join("");
+}
+
+/* Ties the judges to the moment they're judging. A hard skill lands and they
+   react — impressed faces from difficulty 3, cards up from 4 — which is the
+   existing chooseSkill() escalation showing on a second surface for free.
+   Deliberately *not* at routine end, which §5.4 suggested: by then
+   showScreen("results") has already hidden this whole screen, so a card
+   raised there would never be seen. The cards carry a star rather than a
+   number on purpose — judgeScores() owns the only scoring in this game, and
+   a second set of numbers mid-routine would read as a competing score. */
+function reactJudges(skill) {
+  const t = $("#judges-table");
+  if (!t || !skill || skill.difficulty < 3) return;
+  const cards = skill.difficulty >= 4;
+  t.classList.add("wow");
+  if (cards) t.classList.add("cards");
+  setTimeout(() => t.classList.remove("wow", "cards"), cards ? 2000 : 1300);
 }
 
 /* ============================================================
@@ -337,6 +419,53 @@ function toast(msg) {
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2700);
+}
+
+/* An in-design replacement for native confirm() (HANDOFF-ELEVATION.md §4.4).
+   The browser dialog hard-blocks the page — it froze the renderer mid-
+   animation and mid-speech, and it looks like an error message from the
+   operating system rather than anything in this game, which is a jarring
+   thing to put in front of a child on the one screen where she might be
+   deleting her own progress. Returns a promise so callers read the same
+   top-to-bottom way they did before, just `await`ed.
+
+   Defaults are deliberately safe: the cancel button takes focus, Escape and
+   a backdrop click both resolve false, and destructive calls pass
+   `danger: true` to colour the confirming button rather than the dismissing
+   one. `message` is escaped, and a blank line survives as a paragraph break
+   so the existing two-part reset warning keeps its shape. */
+function askConfirm(message, opts) {
+  const o = opts || {};
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-backdrop";
+    wrap.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-msg">
+        <div class="modal-emoji" aria-hidden="true">${o.emoji || "\u{1F914}"}</div>
+        <p class="modal-msg" id="modal-msg">${escapeHtml(message).replace(/\n+/g, "<br><br>")}</p>
+        <div class="row center modal-actions">
+          <button type="button" class="btn ghost" data-answer="no">${escapeHtml(o.cancel || "Never mind")}</button>
+          <button type="button" class="btn ${o.danger ? "pink" : "teal"}" data-answer="yes">${escapeHtml(o.ok || "Yes")}</button>
+        </div>
+      </div>`;
+
+    const finish = (v) => {
+      document.removeEventListener("keydown", onKey, true);
+      wrap.remove();
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    };
+    wrap.addEventListener("click", (e) => {
+      const btn = /** @type {Element} */ (e.target).closest("[data-answer]");
+      if (btn) finish(/** @type {HTMLElement} */ (btn).dataset.answer === "yes");
+      else if (e.target === wrap) finish(false);
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(wrap);
+    /** @type {HTMLElement} */ (wrap.querySelector('[data-answer="no"]')).focus();
+  });
 }
 
 /* ============================================================
@@ -858,7 +987,9 @@ function startSession(cfg) {
     showFeedback("bad", "This browser can't read words out loud, so the word will flash on screen instead. Watch closely!");
   }
   sfx.whistle();
-  setTimeout(() => nextWord(), 700);
+  // guarded for the same reason startParagraphSession()'s copy of this is:
+  // quitting during the whistle beat clears `session` out from under it
+  setTimeout(() => { if (session) nextWord(); }, 700);
 }
 
 function currentWord() {
@@ -901,6 +1032,21 @@ function nextWord() {
   if (!speaker.supported || !speaker.enabled) revealWordBriefly(word);
 }
 
+/* Typing is only ever legal while `phase === "spelling"`. Without this the
+   box stayed live through the whole celebrate-and-advance window, so an
+   excited child typing the next word early leaked characters into the answer
+   she'd already given — and, with the caret mid-word, interleaved them
+   ("land" + an early "jump" -> "lajumpnd"). Disabling rather than clearing on
+   lock is deliberate: her answer stays legible next to the green/red letter
+   boxes for the whole reveal. The flush happens on the way *out* (advance()
+   / nextWord()), which is also the belt-and-braces the brief asked for.
+   HANDOFF-ELEVATION.md §4.3. */
+function lockSpellInput(locked) {
+  $("#spell-input").disabled = locked;
+  $("#btn-submit").disabled = locked;
+  $("#btn-hint").disabled = locked;
+}
+
 /* The one way to move to the next word. Everything that can end a word — the
    Next button, the skill animation finishing, the skip link, the fix-it timer —
    funnels through here, and it no-ops once a word has already been left. */
@@ -908,6 +1054,7 @@ function advance() {
   if (!session) return;
   if (session.phase !== "reveal" && session.phase !== "fixing") return;
   session.phase = "advancing";
+  $("#spell-input").value = "";
   session.index++;
   nextWord();
 }
@@ -1007,9 +1154,13 @@ function wireGame() {
     speaker.prompt(currentWord()[0], null, { slow: true, wordOnly: true });
   });
   $("#btn-hint").addEventListener("click", useHint);
-  $("#btn-quit").addEventListener("click", () => {
+  $("#btn-quit").addEventListener("click", async () => {
     if (session && session.mode === "competition" && session.index < session.total) {
-      if (!confirm("Leave the competition early? Your routine won't be scored.")) return;
+      const leave = await askConfirm("Leave the competition early? Your routine won't be scored.",
+        { emoji: "🏁", ok: "Leave anyway", cancel: "Keep going" });
+      // the modal is non-blocking, so re-check: the routine can finish on its
+      // own timers while she's deciding
+      if (!leave || !session) return;
       session = null;
       speaker.cancel();
       showScreen("home");
@@ -1076,19 +1227,17 @@ function submitAnswer() {
 
   if (right && session.tries === 1) {
     session.phase = "reveal";
-    $("#btn-submit").disabled = true;
-    $("#btn-hint").disabled = true;
+    lockSpellInput(true);
     handleCorrect(word, ms);
   } else if (right) {
     // got there on a retry — the same modest reward a fix has always paid,
     // not the full first-try reward (points / streak / a performed skill)
-    $("#btn-submit").disabled = true;
-    $("#btn-hint").disabled = true;
+    lockSpellInput(true);
     rewardFix(word, "retried");
   } else if (session.tries === 1) {
-    handleFirstMiss(word);
+    handleFirstMiss(word, marks);
   } else if (session.tries === 2) {
-    promptRetry(word, 1);
+    promptRetry(word, 1, marks);
   } else {
     startMultipleChoice(word);
   }
@@ -1157,40 +1306,94 @@ function handleCorrect(word, ms) {
     if (!session || session.phase !== "reveal") return;
     sfx.crowd(1.1, Math.min(1.4, 0.6 + skill.difficulty * 0.16));
     if (skill.difficulty >= 3) burstConfetti(skill.difficulty >= 5 ? 40 : 22);
+    // the stands and the judges' table react to what she just landed, on the
+    // same difficulty ladder the confetti and crowd volume already use
+    if (skill.difficulty >= 3) crowdWave();
+    reactJudges(skill);
     arena.gymnast.setExpression("happy");
     setTimeout(advance, 550);
   });
 }
 
+function pickOne(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+/* HANDOFF-ELEVATION.md §4.6: "So close — check the highlighted letters" used
+   to fire at every miss, including one where every letter came back red
+   (typed `wrng` for `much`) — where it reads as either sarcastic or simply
+   untrue, and points her at a row of highlights that has nothing green in it
+   to check. The opener now follows how close she actually got. The tone
+   never changes, only the accuracy of the claim: "nearly", "some of it", and
+   "let's start over from the sound" are three genuinely different situations
+   and only the first one is "so close". */
+function retryOpener(marks, who) {
+  const hit = marks.filter(Boolean).length;
+  const rate = marks.length ? hit / marks.length : 0;
+  if (rate >= 0.6) {
+    return pickOne([
+      "So close — check the highlighted letters.",
+      "Almost! Green is right, red needs another look.",
+      `Nearly there, ${who} — just a letter or two to fix.`
+    ]);
+  }
+  if (rate > 0) {
+    return pickOne([
+      `Good try, ${who}! Some of it is right — keep the green letters.`,
+      "You've got part of it. Have another go at the red ones.",
+      `Nice effort, ${who} — a few letters still to find.`
+    ]);
+  }
+  return pickOne([
+    "Let's hear it again 🔊 — listen for the very first sound.",
+    `A fresh start, ${who} — play it once more and catch the first sound.`,
+    "Tricky one! Listen again and build it sound by sound."
+  ]);
+}
+
+/* §6.1's "pattern moment" — the highest-value educational change in that
+   brief. The curriculum already knows *why* a word is spelled the way it is
+   (js/words.js's `patterns`); this is the one line that says so, on the
+   retry card, at the moment she's most attentive to it. Deliberately one
+   line and never a wall of text, and deliberately never the answer: the
+   examples come from other words sharing the pattern, so the card still
+   never prints the word she's trying to recall (see CLAUDE.md's "Missing a
+   word is a teaching moment"). Returns "" for an unclassified word — the
+   whole `bonus` list, custom lists, story words outside the curriculum — so
+   the card degrades to exactly what it always showed. */
+function patternLessonHtml(word) {
+  const hint = patternHint(word);
+  if (!hint) return "";
+  const ex = hint.examples.map((w) => `<i>${escapeHtml(w)}</i>`).join(" and ");
+  return `<div class="lesson"><b>${escapeHtml(hint.label)}</b> — ${escapeHtml(hint.tip)}${
+    ex ? ` Like ${ex}.` : ""
+  }</div>`;
+}
+
 /* The first miss is the one that resets the streak and dings the score — a
    retry that also misses (promptRetry) doesn't pile a second penalty on top. */
-function handleFirstMiss(word) {
+function handleFirstMiss(word, marks) {
   session.wrong++;
   session.streak = 0;
   if (session.mode === "competition") session.score = Math.max(0, session.score - 2);
-  promptRetry(word, 2);
+  promptRetry(word, 2, marks);
 }
 
 /* Tries 1 and 2 land here on a miss. No full reveal — the letter boxes
    (already painted green/red by markLetters in submitAnswer) are the
    teaching moment, and she gets a genuine next attempt from memory. */
-function promptRetry(word, triesLeft) {
+function promptRetry(word, triesLeft, marks) {
   sfx.wrong();
   arena.gymnast.setExpression("oops");
   arena.animator.play(SKILL_BY_ID.wobble).then(() => arena.gymnast.setExpression("focused"));
 
   const who = escapeHtml(playerName());
-  const kind = [
-    "So close — check the highlighted letters.",
-    `Good try, ${who}! A couple of letters need another look.`,
-    "Almost! Green is right, red needs work.",
-    `Nice effort, ${who} — try it once more.`
-  ];
 
   showFeedback(
     "bad",
-    `<b>${kind[Math.floor(Math.random() * kind.length)]}</b><br>
+    `<b>${retryOpener(marks || [], who)}</b><br>
      <span class="muted">${triesLeft} ${triesLeft === 1 ? "try" : "tries"} left.</span>
+     ${patternLessonHtml(word)}
      <div class="row" style="margin-top:10px">
        <button class="btn small ghost" id="btn-hear-letters">🔡 Hear it again</button>
        <button class="btn small ghost" id="btn-skip">Skip ahead →</button>
@@ -1204,8 +1407,7 @@ function promptRetry(word, triesLeft) {
   });
 
   $("#spell-input").value = "";
-  $("#spell-input").disabled = false;
-  $("#btn-submit").disabled = false;
+  lockSpellInput(false);
   $("#spell-input").classList.add("shake");
   setTimeout(() => $("#spell-input").classList.remove("shake"), 420);
   $("#spell-input").focus();
@@ -1221,7 +1423,7 @@ function startMultipleChoice(word) {
   arena.animator.play(SKILL_BY_ID.wobble).then(() => arena.gymnast.setExpression("focused"));
 
   $("#spell-form").style.display = "none";
-  $("#btn-hint").disabled = true;
+  lockSpellInput(true);
 
   const others = session.list.words.map((w) => w[0]).filter((w) => w !== word);
   const options = shuffle([word, ...shuffle(others).slice(0, 3)]);
@@ -1262,6 +1464,7 @@ function pickChoice(word, btnEl) {
       "bad",
       `<b>The word was <span class="answer">${escapeHtml(word)}</span></b><br>
        <span class="muted">You'll see it again soon.</span>
+       ${patternLessonHtml(word)}
        <div class="row" style="margin-top:10px"><button class="btn small teal" id="btn-next">Next word →</button></div>`
     );
     $("#btn-next").addEventListener("click", advance);
@@ -1375,11 +1578,28 @@ function startParagraphSession(cfg) {
   paraArena.animator.reset();
   showScreen("paragraph");
 
+  // Paint the story before anything can ask her to spell into it. The old
+  // order left #para-text empty for the whistle beat and only filled it from
+  // inside nextParaBlank(), so any hitch in between showed a HUD over a blank
+  // card — and, worse, could have spoken the first missing word at a blank
+  // she couldn't see yet (HANDOFF-ELEVATION.md §4.5). Rendering up front
+  // means the paragraph is on screen from the first frame, and the delayed
+  // call below only adds the prompt.
+  hideParaFeedback();
+  $("#para-mc-choices").innerHTML = "";
+  $("#para-mc-choices").style.display = "none";
+  $("#para-boxes").innerHTML = "";
+  $("#para-hint").innerHTML = "Get ready — listen for the missing word.";
+  renderParagraph();
+  updateParaHud();
+
   if (!speaker.supported) {
     showParaFeedback("bad", "This browser can't read words out loud, so the missing word will flash in the story instead. Watch closely!");
   }
   sfx.whistle();
-  setTimeout(() => nextParaBlank(), 700);
+  // guarded: leaving the screen during the beat nulls paragraphSession (see
+  // showScreen()), and an unguarded timer would then throw inside a timeout
+  setTimeout(() => { if (paragraphSession) nextParaBlank(); }, 700);
 }
 
 /* Practice mode is open-ended, same as word mode's currentWord(): once the
@@ -1430,6 +1650,15 @@ function nextParaBlank() {
   if (!speaker.supported || !speaker.enabled) revealParaWordBriefly(cur.word);
 }
 
+/* Same reveal-window input lock as word mode's lockSpellInput() — see its
+   comment for why (HANDOFF-ELEVATION.md §4.3 reproduced the leak on both
+   screens, so both get the guard). */
+function lockParaInput(locked) {
+  $("#para-input").disabled = locked;
+  $("#btn-para-submit").disabled = locked;
+  $("#btn-para-hint").disabled = locked;
+}
+
 /* The one way to move to the next blank — mirrors advance()'s own comment:
    every path that can end a blank funnels through here and it no-ops once
    a blank has already been left. */
@@ -1437,6 +1666,7 @@ function advanceParaBlank() {
   if (!paragraphSession) return;
   if (paragraphSession.phase !== "reveal" && paragraphSession.phase !== "fixing") return;
   paragraphSession.phase = "advancing";
+  $("#para-input").value = "";
   paragraphSession.index++;
   nextParaBlank();
 }
@@ -1561,9 +1791,11 @@ function wireParagraph() {
     speaker.prompt(currentParaBlank().word, null, { slow: true, wordOnly: true });
   });
   $("#btn-para-hint").addEventListener("click", useParaHint);
-  $("#btn-para-quit").addEventListener("click", () => {
+  $("#btn-para-quit").addEventListener("click", async () => {
     if (paragraphSession && paragraphSession.mode === "competition" && paragraphSession.index < paragraphSession.total) {
-      if (!confirm("Leave the competition early? Your routine won't be scored.")) return;
+      const leave = await askConfirm("Leave the competition early? Your routine won't be scored.",
+        { emoji: "🏁", ok: "Leave anyway", cancel: "Keep going" });
+      if (!leave || !paragraphSession) return; // see wireGame()'s copy of this re-check
       paragraphSession = null;
       speaker.cancel();
       showScreen("home");
@@ -1619,17 +1851,15 @@ function submitParaAnswer() {
 
   if (right && s.tries === 1) {
     s.phase = "reveal";
-    $("#btn-para-submit").disabled = true;
-    $("#btn-para-hint").disabled = true;
+    lockParaInput(true);
     handleParaCorrect(word);
   } else if (right) {
-    $("#btn-para-submit").disabled = true;
-    $("#btn-para-hint").disabled = true;
+    lockParaInput(true);
     rewardParaFix(word, "retried");
   } else if (s.tries === 1) {
-    handleParaFirstMiss(word);
+    handleParaFirstMiss(word, marks);
   } else if (s.tries === 2) {
-    promptParaRetry(word, 1);
+    promptParaRetry(word, 1, marks);
   } else {
     startParaMultipleChoice(word);
   }
@@ -1699,31 +1929,30 @@ function handleParaCorrect(word) {
   });
 }
 
-function handleParaFirstMiss(word) {
+function handleParaFirstMiss(word, marks) {
   const s = paragraphSession;
   s.wrong++;
   s.streak = 0;
   if (s.mode === "competition") s.score = Math.max(0, s.score - 2);
-  promptParaRetry(word, 2);
+  promptParaRetry(word, 2, marks);
 }
 
-function promptParaRetry(word, triesLeft) {
+/* Same distance-aware opener and same pattern moment as word mode's
+   promptRetry() — a blank is a word, so the teaching is identical; only the
+   DOM ids differ (see this section's header for why the two ladders are
+   forked rather than shared). */
+function promptParaRetry(word, triesLeft, marks) {
   sfx.wrong();
   paraArena.gymnast.setExpression("oops");
   paraArena.animator.play(SKILL_BY_ID.wobble).then(() => paraArena.gymnast.setExpression("focused"));
 
   const who = escapeHtml(playerName());
-  const kind = [
-    "So close — check the highlighted letters.",
-    `Good try, ${who}! A couple of letters need another look.`,
-    "Almost! Green is right, red needs work.",
-    `Nice effort, ${who} — try it once more.`
-  ];
 
   showParaFeedback(
     "bad",
-    `<b>${kind[Math.floor(Math.random() * kind.length)]}</b><br>
+    `<b>${retryOpener(marks || [], who)}</b><br>
      <span class="muted">${triesLeft} ${triesLeft === 1 ? "try" : "tries"} left.</span>
+     ${patternLessonHtml(word)}
      <div class="row" style="margin-top:10px">
        <button class="btn small ghost" id="btn-para-hear-letters">🔡 Hear it again</button>
        <button class="btn small ghost" id="btn-para-skip">Skip ahead →</button>
@@ -1737,8 +1966,7 @@ function promptParaRetry(word, triesLeft) {
   });
 
   $("#para-input").value = "";
-  $("#para-input").disabled = false;
-  $("#btn-para-submit").disabled = false;
+  lockParaInput(false);
   $("#para-input").classList.add("shake");
   setTimeout(() => $("#para-input").classList.remove("shake"), 420);
   $("#para-input").focus();
@@ -1757,7 +1985,7 @@ function startParaMultipleChoice(word) {
   paraArena.animator.play(SKILL_BY_ID.wobble).then(() => paraArena.gymnast.setExpression("focused"));
 
   $("#para-form").style.display = "none";
-  $("#btn-para-hint").disabled = true;
+  lockParaInput(true);
 
   const others = allBlankWords(s.list).filter((w) => w !== word);
   const options = shuffle([word, ...shuffle(others).slice(0, 3)]);
@@ -1807,6 +2035,7 @@ function pickParaChoice(word, btnEl) {
       "bad",
       `<b>The word was <span class="answer">${escapeHtml(word)}</span></b><br>
        <span class="muted">You'll see it again soon.</span>
+       ${patternLessonHtml(word)}
        <div class="row" style="margin-top:10px"><button class="btn small teal" id="btn-para-next">Next word →</button></div>`
     );
     $("#btn-para-next").addEventListener("click", advanceParaBlank);
@@ -1849,6 +2078,19 @@ function showFeedback(kind, html, el) {
   const target = el || $("#feedback");
   target.className = "feedback show " + kind;
   target.innerHTML = html;
+
+  /* §4.2's viewport work makes the arena, the prompt and the input fit
+     together on a short laptop screen — but the feedback card only appears
+     *after* she answers, below all three, so on a 639px-tall window the
+     retry card (and with it §6.1's pattern lesson, the whole point of this
+     pass) landed under the fold. Only "bad" scrolls: a correct answer's card
+     sits under the arena on purpose, because the reward there is watching
+     her perform the skill and scrolling away from it would take the payoff
+     off screen. `block: "nearest"` means this is a no-op on any window tall
+     enough to have shown the card anyway. */
+  if (kind === "bad") {
+    target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
 }
 
 function hideFeedback(el) {
@@ -2764,7 +3006,7 @@ function wireParents() {
   });
 
   // Same delegated-once reasoning as the lists panel below.
-  $("#tab-players").addEventListener("click", (e) => {
+  $("#tab-players").addEventListener("click", async (e) => {
     const sw = e.target.closest("[data-switch]");
     const del = e.target.closest("[data-delplayer]");
     if (sw) {
@@ -2777,7 +3019,9 @@ function wireParents() {
     if (del) {
       const p = Store.file.profiles[del.dataset.delplayer];
       if (!p) return;
-      if (!confirm(`Delete ${p.name} and all of their progress? This cannot be undone.`)) return;
+      const go = await askConfirm(`Delete ${p.name} and all of their progress? This cannot be undone.`,
+        { emoji: "⚠️", ok: `Delete ${p.name}`, danger: true });
+      if (!go || !Store.file.profiles[p.id]) return;
       Store.deleteProfile(p.id);
       applyProfileSettings();
       renderParents();
@@ -2796,7 +3040,7 @@ function wireParents() {
 
   // Delegated once: renderListsTab replaces the panel's contents, so binding
   // inside it would stack a new listener on every render.
-  $("#tab-lists").addEventListener("click", (e) => {
+  $("#tab-lists").addEventListener("click", async (e) => {
     const ed = e.target.closest("[data-edit]");
     const del = e.target.closest("[data-del]");
     if (ed) {
@@ -2813,7 +3057,7 @@ function wireParents() {
     }
     if (del) {
       const l = Store.data.customLists.find((x) => x.id === del.dataset.del);
-      if (l && confirm(`Delete the list "${l.name}"?`)) {
+      if (l && await askConfirm(`Delete the list "${l.name}"?`, { emoji: "🗑️", ok: "Delete it", danger: true })) {
         if (editingListId === l.id) editingListId = null;
         Store.deleteCustomList(l.id);
         renderListsTab();
@@ -3077,6 +3321,7 @@ function renderProgressTab() {
       const medal = { gold: "🥇", silver: "🥈", bronze: "🥉", ribbon: "🎀" }[s.medal] || "—";
       return `<tr>
         <td>${new Date(s.ts).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</td>
+        <td>${s.activity === "paragraph" ? "📖 Story" : "🔤 Words"}</td>
         <td>${s.mode === "competition" ? "Competition" : "Practice"}</td>
         <td>${escapeHtml(s.listLabel || "")}</td>
         <td>${s.correct}/${s.total}</td>
@@ -3085,6 +3330,8 @@ function renderProgressTab() {
       </tr>`;
     })
     .join("");
+
+  const splitHtml = renderActivitySplit(Store.activitySplit(st.sessions));
 
   $("#tab-progress").innerHTML = `
     <div class="stat-grid">
@@ -3104,14 +3351,16 @@ function renderProgressTab() {
     </div>
     ${trendPoints.length ? renderTrendChart(trendPoints) : '<p class="muted">Play a session and this chart fills in.</p>'}
 
+    ${splitHtml}
+
     <h3 style="margin-top:24px">Still practicing</h3>
     <p class="muted" style="font-size:14px">⭐ practices a word more often, 💤 eases off it — pin from here or Word Detail.</p>
     <table class="data"><thead><tr><th>Word</th><th>Misses</th><th>Tries</th><th>Accuracy</th><th></th><th></th></tr></thead>
       <tbody>${troubleRows}</tbody></table>
 
     <h3 style="margin-top:24px">Recent sessions</h3>
-    <table class="data"><thead><tr><th>When</th><th>Mode</th><th>List</th><th>Correct</th><th>Score</th><th></th></tr></thead>
-      <tbody>${recent || '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'}</tbody></table>`;
+    <table class="data"><thead><tr><th>When</th><th>Activity</th><th>Mode</th><th>List</th><th>Correct</th><th>Score</th><th></th></tr></thead>
+      <tbody>${recent || '<tr><td colspan="7" class="muted">Nothing yet.</td></tr>'}</tbody></table>`;
 
   $$("[data-range]", $("#tab-progress")).forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -3125,6 +3374,43 @@ function renderProgressTab() {
     renderFocusTab();
     renderWordsTab();
   });
+}
+
+/* Words vs. Stories (docs/HANDOFF-ELEVATION.md §6.5). Deliberately renders
+   nothing at all until she has played both — a "Stories: no data" card next
+   to a real one is noise for the many households that only ever use word
+   mode, and the comparison is the entire point of the section. The verdict
+   line is capped at a plain-English reading of the gap rather than a
+   statistic: with a handful of sessions each, a 4-point difference means
+   nothing, so anything under 10 points is reported as "about the same". */
+function renderActivitySplit(split) {
+  const w = split.spelling, p = split.paragraph;
+  if (!w.sessions || !p.sessions) return "";
+
+  const gap = Math.round((p.accuracy - w.accuracy) * 100);
+  let verdict;
+  if (Math.abs(gap) < 10) {
+    verdict = "She's spelling about as well inside a story as she does with single words — the reading context isn't costing her anything.";
+  } else if (gap > 0) {
+    verdict = `Story context is helping: she's ${gap} points more accurate when the word sits in a sentence she can read.`;
+  } else {
+    verdict = `Single words are going better by ${-gap} points. Reading and spelling at once is a heavier load — worth a few more short story sessions rather than longer ones.`;
+  }
+
+  const card = (icon, name, b) => `
+    <div class="stat-box">
+      <div class="k">${icon} ${name}</div>
+      <div class="v">${pct(b.accuracy)}</div>
+      <div class="sub">${b.correct} of ${b.total} words · ${b.sessions} session${b.sessions === 1 ? "" : "s"}</div>
+    </div>`;
+
+  return `
+    <h3 style="margin-top:24px">Words vs. Stories</h3>
+    <div class="stat-grid" style="margin-bottom:8px">
+      ${card("🔤", "Single words", w)}
+      ${card("📖", "Words in a story", p)}
+    </div>
+    <p class="muted" style="font-size:14px">${verdict}</p>`;
 }
 
 /* A small hand-rolled SVG line chart — one point per session, accuracy on
@@ -3673,14 +3959,16 @@ function renderSettingsTab() {
     renderSettingsTab();
     toast("Sync turned back on.");
   });
-  bind("#sync-regenerate", "click", () => {
-    if (!confirm("The old code will stop working on any other linked device. Continue?")) return;
+  bind("#sync-regenerate", "click", async () => {
+    if (!await askConfirm("The old code will stop working on any other linked device. Continue?",
+      { emoji: "🔑", ok: "Generate a new code" })) return;
     Store.rotateSyncCode();
     renderSettingsTab();
     toast("New code generated.");
   });
-  bind("#sync-disable", "click", () => {
-    if (!confirm(`${playerName()}'s progress will stop leaving this device — any other linked device keeps whatever it last saw. Continue?`)) return;
+  bind("#sync-disable", "click", async () => {
+    if (!await askConfirm(`${playerName()}'s progress will stop leaving this device — any other linked device keeps whatever it last saw. Continue?`,
+      { emoji: "📴", ok: "Play offline only" })) return;
     Store.setLocalOnly(true);
     renderSettingsTab();
     toast("Playing offline only now.");
@@ -3695,7 +3983,8 @@ function renderSettingsTab() {
   bind("#sync-link", "click", async () => {
     const code = $("#sync-link-code").value.trim().toUpperCase();
     if (!code) return toast("Type a code first.");
-    if (!confirm(`This replaces ${playerName()}'s local progress with whatever's synced under that code. Continue?`)) return;
+    if (!await askConfirm(`This replaces ${playerName()}'s local progress with whatever's synced under that code. Continue?`,
+      { emoji: "🔗", ok: "Link this device", danger: true })) return;
     const ok = await Store.linkWithCode(code);
     if (ok) {
       applyProfileSettings();
@@ -3707,8 +3996,9 @@ function renderSettingsTab() {
     }
   });
 
-  bind("#set-reset-stats", "click", () => {
-    if (!confirm("Clear all practice history? Stars and unlocked items are kept.")) return;
+  bind("#set-reset-stats", "click", async () => {
+    if (!await askConfirm("Clear all practice history? Stars and unlocked items are kept.",
+      { emoji: "🧹", ok: "Clear history", danger: true })) return;
     Store.data.stats = { words: {}, sessions: [], attempts: 0, correct: 0 };
     Store.data.best = { score: 0, streak: 0 };
     Store.data.medals = { gold: 0, silver: 0, bronze: 0, ribbon: 0 };
@@ -3717,9 +4007,13 @@ function renderSettingsTab() {
     refreshHome();
     toast("Stats cleared.");
   });
-  bind("#set-reset-all", "click", () => {
-    if (!confirm(`Reset EVERYTHING for ${playerName()} — stats, stars, unlocked items and custom lists?\n\nOther players are not affected.`)) return;
-    if (!confirm("Really sure? This cannot be undone.")) return;
+  bind("#set-reset-all", "click", async () => {
+    // still two prompts deep, deliberately: this is the one irreversible
+    // button in the dashboard, and a mis-tap here costs a child everything
+    if (!await askConfirm(`Reset EVERYTHING for ${playerName()} — stats, stars, unlocked items and custom lists?\n\nOther players are not affected.`,
+      { emoji: "🚨", ok: "Reset everything", danger: true })) return;
+    if (!await askConfirm("Really sure? This cannot be undone.",
+      { emoji: "🚨", ok: "Yes, reset it all", danger: true })) return;
     Store.reset();
     applyProfileSettings();
     renderParents();

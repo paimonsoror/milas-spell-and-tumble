@@ -411,10 +411,123 @@
     <div class="hud-goal" id="phud-goal"></div>
   </div>
 
-  <div class="arena">
+  <!-- The story stage. HANDOFF-PARAGRAPH scoped graphics out and this screen
+       shipped as a flat void with a purple bar in it (HANDOFF-ELEVATION.md
+       §4.1/§5.1). Deliberately NOT a clone of the competition arena above:
+       a story deserves its own setting, so this is a reading corner that
+       happens to be in a gym — bookshelf, floor lamp, mats stacked like
+       cushions, bunting, and a STORY TIME banner instead of a crowd, judges'
+       table and STATE CHAMPIONSHIP. Same discipline as the arena, though:
+       every colour is a class routed through :root's --story-* custom
+       properties, never an inline hex, so a re-theme is still one edit.
+       Her floor contact stays at y=312 exactly as in the arena, so the
+       shared Gymnast/Animator setup needs no per-screen tuning. -->
+  <div class="arena story-arena">
     <svg viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-      <rect x="40" y="312" width="620" height="46" rx="6" class="para-mat"/>
-      <rect x="0" y="358" width="700" height="22" class="arena-lip"/>
+      <defs>
+        <linearGradient id="storyWall" x1="0" y1="0" x2="0" y2="1">
+          <stop class="story-wall-top-stop" offset="0%"/>
+          <stop class="story-wall-bottom-stop" offset="100%"/>
+        </linearGradient>
+        <linearGradient id="storyRug" x1="0" y1="0" x2="0" y2="1">
+          <stop class="story-rug-top-stop" offset="0%"/>
+          <stop class="story-rug-bottom-stop" offset="100%"/>
+        </linearGradient>
+        <radialGradient id="storyLamp" cx="50%" cy="50%" r="50%">
+          <stop class="story-lamp-stop" offset="0%" stop-opacity=".42"/>
+          <stop class="story-lamp-stop" offset="100%" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <rect width="700" height="380" fill="url(#storyWall)"/>
+
+      <!-- bunting, either side of the banner -->
+      <g class="story-bunting">
+        <path d="M 0,18 Q 116,52 232,26"/>
+        <path d="M 468,26 Q 584,52 700,18"/>
+      </g>
+      <g class="story-flags">
+        <path class="story-flag-a" d="M 21,26 L 39,29 L 28,45 Z"/>
+        <path class="story-flag-b" d="M 67,35 L 85,38 L 74,54 Z"/>
+        <path class="story-flag-c" d="M 113,40 L 131,41 L 121,58 Z"/>
+        <path class="story-flag-a" d="M 159,38 L 177,36 L 169,54 Z"/>
+        <path class="story-flag-b" d="M 523,36 L 541,38 L 530,54 Z"/>
+        <path class="story-flag-c" d="M 569,41 L 587,40 L 578,57 Z"/>
+        <path class="story-flag-a" d="M 615,38 L 633,35 L 625,52 Z"/>
+        <path class="story-flag-b" d="M 661,29 L 679,26 L 672,43 Z"/>
+      </g>
+
+      <!-- banner -->
+      <g>
+        <path class="story-banner" d="M 232,0 L 468,0 L 468,42 L 350,56 L 232,42 Z"/>
+        <path class="story-banner-shadow" d="M 232,42 L 350,56 L 468,42 L 468,48 L 350,62 L 232,48 Z"/>
+        <text x="350" y="29" text-anchor="middle" font-family="Trebuchet MS, sans-serif"
+              font-size="19" font-weight="bold" fill="#fff" letter-spacing="2.5">STORY TIME</text>
+      </g>
+
+      <!-- bookshelf -->
+      <g>
+        <rect class="story-shelf-back" x="42" y="156" width="134" height="152" rx="4"/>
+        <rect class="story-shelf" x="34" y="150" width="150" height="8" rx="3"/>
+        <rect class="story-shelf" x="34" y="150" width="8" height="158"/>
+        <rect class="story-shelf" x="176" y="150" width="8" height="158"/>
+        <g class="story-books">
+          <rect class="story-book-1" x="48" y="168" width="13" height="36" rx="2"/>
+          <rect class="story-book-2" x="63" y="174" width="11" height="30" rx="2"/>
+          <rect class="story-book-3" x="76" y="164" width="14" height="40" rx="2"/>
+          <rect class="story-book-4" x="92" y="176" width="12" height="28" rx="2"/>
+          <rect class="story-book-5" x="106" y="169" width="13" height="35" rx="2"/>
+          <rect class="story-book-2" x="121" y="180" width="11" height="24" rx="2"/>
+          <rect class="story-book-1" x="134" y="172" width="14" height="32" rx="2"/>
+        </g>
+        <rect class="story-shelf" x="38" y="204" width="142" height="7" rx="2"/>
+        <g class="story-books">
+          <rect class="story-book-3" x="48" y="223" width="12" height="34" rx="2"/>
+          <rect class="story-book-5" x="62" y="229" width="14" height="28" rx="2"/>
+          <rect class="story-book-1" x="78" y="219" width="11" height="38" rx="2"/>
+          <rect class="story-book-4" x="91" y="231" width="13" height="26" rx="2"/>
+          <rect class="story-book-2" x="106" y="224" width="12" height="33" rx="2"/>
+          <rect class="story-book-3" x="120" y="235" width="15" height="22" rx="2"/>
+        </g>
+        <rect class="story-shelf" x="38" y="257" width="142" height="7" rx="2"/>
+        <g class="story-books">
+          <rect class="story-book-5" x="48" y="276" width="13" height="32" rx="2"/>
+          <rect class="story-book-2" x="63" y="282" width="12" height="26" rx="2"/>
+          <rect class="story-book-4" x="77" y="272" width="14" height="36" rx="2"/>
+          <rect class="story-book-1" x="93" y="284" width="11" height="24" rx="2"/>
+        </g>
+      </g>
+
+      <!-- floor lamp, and the warm pool of light it throws -->
+      <ellipse cx="238" cy="236" rx="118" ry="104" fill="url(#storyLamp)"/>
+      <g>
+        <rect class="story-lamp-pole" x="235" y="222" width="6" height="86" rx="3"/>
+        <ellipse class="story-lamp-pole" cx="238" cy="308" rx="21" ry="5"/>
+        <path class="story-lampshade" d="M 213,222 L 263,222 L 253,186 L 223,186 Z"/>
+        <rect class="story-lampshade-trim" x="211" y="218" width="54" height="6" rx="3"/>
+      </g>
+
+      <!-- a few sparkles in the lamplight, same cheap magic as the arena's -->
+      <g class="story-sparkle" opacity=".85">
+        <path d="M 300,74 l 3,9 9,3 -9,3 -3,9 -3,-9 -9,-3 9,-3 Z"/>
+        <path d="M 432,110 l 2.4,7 7,2.4 -7,2.4 -2.4,7 -2.4,-7 -7,-2.4 7,-2.4 Z"/>
+        <path d="M 178,110 l 2,6 6,2 -6,2 -2,6 -2,-6 -6,-2 6,-2 Z"/>
+      </g>
+
+      <!-- mats stacked like cushions in the corner -->
+      <g>
+        <rect class="story-cushion-1" x="541" y="284" width="132" height="24" rx="12"/>
+        <rect class="story-cushion-2" x="553" y="263" width="108" height="22" rx="11"/>
+        <rect class="story-cushion-3" x="565" y="243" width="84" height="21" rx="10"/>
+      </g>
+
+      <!-- ground plane, rug, floor lip -->
+      <rect class="story-ground" x="0" y="308" width="700" height="72"/>
+      <rect class="story-ground-edge" x="0" y="308" width="700" height="4" opacity=".8"/>
+      <rect x="40" y="312" width="620" height="46" rx="10" fill="url(#storyRug)"/>
+      <rect class="story-rug-line" x="54" y="318" width="592" height="34" rx="7" fill="none"
+            stroke-width="2" stroke-dasharray="4 8" opacity=".6"/>
+      <rect class="story-lip" x="0" y="358" width="700" height="22"/>
     </svg>
     <svg id="para-gymnast" viewBox="0 0 700 380" preserveAspectRatio="xMidYMid slice"></svg>
     <div class="layer-fx" id="para-fx-layer"></div>

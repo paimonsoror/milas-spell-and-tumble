@@ -11,7 +11,30 @@
    in a session. Average word length climbs every grade on purpose
    (tests/check.js asserts it), and no word appears in more than one of
    g1-g5 — "bonus" is the one deliberate exception, since it's cross-grade
-   gym/cheer vocabulary by design, not a graded list. */
+   gym/cheer vocabulary by design, not a graded list.
+
+   ---- patterns (docs/HANDOFF-ELEVATION.md §6.1) ----
+   Those clusters used to live only in the `//` comments below. CLAUDE.md's
+   "Phonics-pattern grouping lives in source comments, not per-word metadata"
+   said to promote them to data the day something could actually *use* one,
+   and to hang them off the list object rather than growing the [word,
+   sentence] tuple — that day arrived: a missed word now gets one line of
+   real instruction on its retry card ("**ch** says /ch/ — like in *chin*
+   and *lunch*"), which is the moment of maximum attention in the whole app.
+
+   So each g1-g5 list carries a `patterns: [{ id, label, tip, words }]`
+   array, and the comment headings below are now captions on that data
+   rather than the only record of it. The word membership is written out
+   longhand and duplicated from `words` on purpose: tests/check.js asserts
+   every g1-g5 word belongs to exactly one pattern and that no pattern
+   invents a word its list doesn't have, so the duplication can't silently
+   drift — adding a word without classifying it fails the build.
+
+   `bonus` deliberately has no patterns. It is sport vocabulary chosen for
+   meaning, not a phonics-designed list (see above), so there is no honest
+   cluster to assign; `patternFor()` returns null for anything it can't
+   classify and the retry card simply omits the lesson line, which is also
+   what happens for a grown-up's custom list. */
 
 const WORD_LISTS = {
   g1: {
@@ -69,12 +92,44 @@ const WORD_LISTS = {
       ["have", "I have a new leotard."],
       ["your", "Point your toes."],
       ["see", "I see the finish line."]
+    ],
+    patterns: [
+      {
+        id: "g1-short-vowels",
+        label: "Short vowel words",
+        tip: "Say it slowly and write one letter for every sound you hear.",
+        words: ["cat", "bag", "hand", "red", "bed", "ten", "big", "win", "sit", "hop", "top", "run"]
+      },
+      {
+        id: "g1-blends",
+        label: "Blends",
+        tip: "Two letters at the start, but you still say both of them — s-t-op.",
+        words: ["stop", "flip", "grab", "swim", "trip", "drop", "spin", "stand", "clap", "jump"]
+      },
+      {
+        id: "g1-digraphs",
+        label: "Digraphs",
+        tip: "Two letters, one sound: sh, ch, th and wh each make a single sound.",
+        words: ["shop", "wish", "chin", "that", "this", "much", "when", "whip"]
+      },
+      {
+        id: "g1-endings",
+        label: "-ck, -ng and -nk endings",
+        tip: "These endings travel as a pair — keep both letters together at the end.",
+        words: ["kick", "sock", "sing", "ring", "pink", "thank"]
+      },
+      {
+        id: "g1-sight",
+        label: "Sight words",
+        tip: "This one doesn't sound the way it looks, so it's a word to remember by heart.",
+        words: ["like", "look", "play", "was", "went", "said", "they", "have", "your", "see"]
+      }
     ]
   },
 
   g2: {
     label: "Grade 2",
-    blurb: "Silent e, vowel teams, r-controlled vowels & tricky little words",
+    blurb: "Silent e, vowel teams, Bossy R words & tricky little words",
     words: [
       // silent e (a_e, i_e, o_e, u_e)
       ["made", "I made the team."],
@@ -128,12 +183,45 @@ const WORD_LISTS = {
       ["once", "We practiced it once more."],
       ["only", "Only two turns are left."],
       ["other", "Use your other foot."]
+    ],
+    patterns: [
+      {
+        id: "g2-silent-e",
+        label: "Silent e",
+        tip: "The e on the end says nothing — its job is to make the vowel say its own name.",
+        words: ["made", "time", "smile", "shape", "hope", "side", "prize", "cute"]
+      },
+      {
+        id: "g2-vowel-teams",
+        label: "Vowel teams",
+        tip: "Two vowels together make one sound — keep the pair side by side.",
+        words: ["rain", "day", "team", "seat", "clean", "speak", "coach", "float", "throw", "tie"]
+      },
+      {
+        id: "g2-bossy-r",
+        label: "Bossy R",
+        tip: "The r bosses the vowel around, so ar, or, er, ir and ur don't sound like plain vowels.",
+        words: ["start", "sharp", "sport", "short", "first", "turn", "hurt", "bird"]
+      },
+      {
+        id: "g2-built",
+        label: "Words you can build",
+        tip: "Break it into the smaller word and the ending you already know, then spell each part.",
+        words: ["inside", "outside", "upside", "anything", "jumping", "cheering", "making"]
+      },
+      {
+        id: "g2-tricky",
+        label: "Tricky words",
+        tip: "This one breaks the rules — picture the whole word and remember it in one piece.",
+        words: ["because", "before", "could", "every", "found", "going", "happy", "house",
+                "kind", "might", "night", "once", "only", "other"]
+      }
     ]
   },
 
   g3: {
     label: "Grade 3",
-    blurb: "Prefixes, suffixes, doubled consonants & silent letters",
+    blurb: "Word beginnings & endings, the doubling rule, silent letters",
     words: [
       // prefixes (un-, re-, dis-)
       ["unable", "She felt unable to stop smiling."],
@@ -190,12 +278,58 @@ const WORD_LISTS = {
       ["breakfast", "Eat breakfast before the meet."],
       ["brother", "My brother came to cheer."],
       ["favorite", "The beam is my favorite event."]
+    ],
+    patterns: [
+      {
+        id: "g3-prefixes",
+        label: "Prefixes",
+        tip: "The prefix stays whole and the base word stays whole — just join them up.",
+        words: ["unable", "replay", "redo", "unfair", "disagree", "discover"]
+      },
+      {
+        id: "g3-suffixes",
+        label: "Suffixes",
+        tip: "Find the base word first, then add the ending onto the end of it.",
+        words: ["careful", "fearless", "quickly", "kindness", "brightest", "biggest",
+                "faster", "stronger", "happiness", "carefully"]
+      },
+      {
+        id: "g3-doubling",
+        label: "The doubling rule",
+        tip: "Short vowel plus one last consonant? Double that consonant before -ing or -ed.",
+        words: ["running", "stopped", "clapping", "skipping", "gripped", "tapping"]
+      },
+      {
+        id: "g3-silent-letters",
+        label: "Silent letters",
+        tip: "There's a letter in here you never say — but it still has to be written.",
+        words: ["knee", "wrist", "climb", "though", "knew", "wrong"]
+      },
+      {
+        id: "g3-soft-cg",
+        label: "Soft c and soft g",
+        tip: "Before e, i or y, c says /s/ and g says /j/.",
+        words: ["circle", "gymnast", "giant", "cent", "century", "gentle"]
+      },
+      {
+        id: "g3-homophones",
+        label: "Sound-alike words",
+        tip: "Another word sounds exactly the same — listen to the sentence to know which one it wants.",
+        words: ["their", "here", "new", "whole"]
+      },
+      {
+        id: "g3-whole",
+        label: "Words worth learning whole",
+        tip: "Clap it into syllables and spell one chunk at a time.",
+        words: ["address", "animal", "answer", "balance", "beautiful", "believe",
+                "between", "breakfast", "brother", "favorite"]
+      }
     ]
   },
 
   g4: {
     label: "Grade 4",
-    blurb: "Latin suffixes, advanced prefixes & academic vocabulary",
+    blurb: "Big endings like -tion and -ous, plus long words worth knowing",
     words: [
       // -tion / -sion
       ["attention", "Pay attention to the coach."],
@@ -249,12 +383,53 @@ const WORD_LISTS = {
       ["environment", "The gym is a safe environment."],
       ["rhythm", "Cheer needs good rhythm."],
       ["muscle", "You need muscle for the bars."]
+    ],
+    patterns: [
+      {
+        id: "g4-tion",
+        label: "-tion and -sion",
+        tip: "That /shun/ sound on the end is almost always spelled -tion.",
+        words: ["attention", "competition", "direction", "motion", "decision",
+                "action", "celebration", "tension"]
+      },
+      {
+        id: "g4-able",
+        label: "-able and -ible",
+        tip: "-able is the common one; -ible turns up when the part in front isn't a whole word by itself.",
+        words: ["comfortable", "flexible", "incredible", "capable", "reliable", "adjustable"]
+      },
+      {
+        id: "g4-ous",
+        label: "-ous",
+        tip: "When a describing word ends in that 'us' sound, spell it -ous.",
+        words: ["famous", "nervous", "curious", "gorgeous", "courageous", "serious"]
+      },
+      {
+        id: "g4-ment-ness",
+        label: "-ment and -ness",
+        tip: "These endings turn a word into a thing, and the base word underneath never changes.",
+        words: ["movement", "excitement", "achievement", "awkwardness", "agreement", "statement"]
+      },
+      {
+        id: "g4-prefixes",
+        label: "Prefixes",
+        tip: "Add the prefix to the front without changing a single letter of the base word.",
+        words: ["nonstop", "prepare", "mistake", "overcome", "preview", "misplace"]
+      },
+      {
+        id: "g4-vocabulary",
+        label: "Words worth learning whole",
+        tip: "Say it syllable by syllable and spell each chunk in turn.",
+        words: ["athlete", "audience", "average", "calendar", "champion", "character",
+                "confident", "experience", "schedule", "journey", "energy", "environment",
+                "rhythm", "muscle"]
+      }
     ]
   },
 
   g5: {
     label: "Grade 5",
-    blurb: "Challenge suffixes, advanced roots & competition vocabulary",
+    blurb: "Championship-level endings, long roots & competition words",
     words: [
       // -tious / -cious
       ["cautious", "Be cautious on a new skill."],
@@ -303,6 +478,41 @@ const WORD_LISTS = {
       ["precision", "Her timing had real precision."],
       ["rehearsal", "We had one last rehearsal."],
       ["technique", "Work on your technique."]
+    ],
+    patterns: [
+      {
+        id: "g5-cious",
+        label: "-cious and -tious",
+        tip: "Both endings say /shus/ — never spell that sound the way it sounds.",
+        words: ["cautious", "gracious", "spacious", "delicious"]
+      },
+      {
+        id: "g5-ance-ence",
+        label: "-ance and -ence",
+        tip: "These two endings sound identical, so this is one to picture and remember.",
+        words: ["endurance", "confidence", "performance", "persistence", "excellence", "brilliance"]
+      },
+      {
+        id: "g5-ary-ory",
+        label: "-ary, -ery and -ory",
+        tip: "The vowel in this ending is almost silent when you say it — remember which one belongs here.",
+        words: ["necessary", "temporary", "victory", "mandatory", "memory"]
+      },
+      {
+        id: "g5-roots",
+        label: "Big words from roots",
+        tip: "Break it at the syllables and spell one piece at a time.",
+        words: ["accomplish", "acrobatic", "appreciate", "athletic", "brilliant", "choreography",
+                "committee", "competitive", "concentrate", "determination", "disciplined", "enthusiasm"]
+      },
+      {
+        id: "g5-competition",
+        label: "Competition words",
+        tip: "A long word you'll use a lot — clap the syllables, then spell each one.",
+        words: ["definitely", "dramatic", "equipment", "exhausted", "extraordinary", "gracefully",
+                "gymnastics", "immediately", "independent", "magnificent", "opportunity",
+                "perseverance", "precision", "rehearsal", "technique"]
+      }
     ]
   },
 
@@ -348,4 +558,52 @@ const WORD_LISTS = {
 
 const GRADE_ORDER = ["g1", "g2", "g3", "g4", "g5", "bonus"];
 
-export { WORD_LISTS, GRADE_ORDER };
+/* ---- pattern lookup (docs/HANDOFF-ELEVATION.md §6.1) ----
+
+   Deliberately keyed by word across every list rather than scoped to the
+   list she happens to be playing, for two reasons. A word lands in exactly
+   one of g1-g5 (tests/check.js has always enforced that), so a global map is
+   unambiguous by construction. And Story Spelling's blank words come from
+   js/passages.js, not from any WORD_LISTS list at all — a global lookup is
+   what lets the same lesson line appear on both activities' retry cards
+   without either one having to know which grade a word "belongs" to. Words
+   with no classification — the whole `bonus` list, a grown-up's custom list,
+   a story word that isn't in the curriculum — simply return null, and the
+   caller shows the retry card it always showed. */
+const PATTERN_BY_WORD = (() => {
+  const map = new Map();
+  for (const key of GRADE_ORDER) {
+    for (const p of WORD_LISTS[key].patterns || []) {
+      for (const w of p.words) if (!map.has(w)) map.set(w, p);
+    }
+  }
+  return map;
+})();
+
+function patternFor(word) {
+  return PATTERN_BY_WORD.get(String(word || "").toLowerCase()) || null;
+}
+
+/* The retry card's one line of instruction. `examples` are drawn from the
+   pattern's own word list minus the word she just missed, so they're always
+   words that genuinely share the pattern and never the answer she's still
+   trying to recall. Returns null — not an empty shape — when the word isn't
+   classified, so the caller can branch on presence alone. */
+function patternHint(word, exampleCount) {
+  const p = patternFor(word);
+  if (!p) return null;
+  const w = String(word).toLowerCase();
+  const pool = p.words.filter((x) => x !== w);
+  const want = Math.min(exampleCount == null ? 2 : exampleCount, pool.length);
+  const picked = [];
+  const taken = new Set();
+  while (picked.length < want) {
+    const i = Math.floor(Math.random() * pool.length);
+    if (taken.has(i)) continue;
+    taken.add(i);
+    picked.push(pool[i]);
+  }
+  return { id: p.id, label: p.label, tip: p.tip, examples: picked };
+}
+
+export { WORD_LISTS, GRADE_ORDER, patternFor, patternHint };

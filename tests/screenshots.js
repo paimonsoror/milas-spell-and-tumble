@@ -22,7 +22,7 @@ const preamble = `
   const { Store, arena, sfx, speaker, SKILL_BY_ID, poseFrom, submitAnswer,
     showScreen, refreshHome, startSession, advance, startLetterRound,
     currentLetterItem, finishLetterRound, renderParents, announceSkill,
-    setParentsUnlocked } = window.__app;
+    setParentsUnlocked, startParagraphSession, advanceParaBlank } = window.__app;
   Store.reset();                       // driver pages share one file:// origin
   arena.gymnast.setLook(Store.data.look);
   sfx.enabled = false; speaker.enabled = false; speaker.supported = false;
@@ -75,6 +75,41 @@ const drivers = {
     setTimeout(() => {
       for (let n = 0; n < 6 && window.__app.session; n++) { answer(n !== 2); advance(); }
     }, 800);`,
+
+  /* The pattern moment (docs/HANDOFF-ELEVATION.md §6.1) on its worst-case
+     input: `wrng` for `much` shares not one letter position with the answer,
+     which is the exact case §4.6 caught the old "So close!" copy fumbling.
+     The queue is overridden rather than fished for, so this always shows the
+     same word and the same lesson. */
+  "game-lesson": `
+    startSession({ mode:'practice', sport:'gym', list:'g1', length:10 });
+    setTimeout(() => {
+      const s = window.__app.session;
+      s.queue = [['much','I like gym so much.']];
+      s.index = 0;
+      document.querySelector('#spell-input').value = 'wrng';
+      submitAnswer();
+    }, 800);`,
+
+  // the new story stage (§5.1) — scenery, story card and the active blank
+  "story-play": `
+    Store.addStars(12);
+    startParagraphSession({ mode:'practice', sport:'gym', grade:'g2' });`,
+
+  // and its retry card, which carries the same pattern lesson word mode does
+  "story-lesson": `
+    startParagraphSession({ mode:'practice', sport:'gym', grade:'g2' });
+    setTimeout(() => {
+      document.querySelector('#para-input').value = 'zzzz';
+      document.querySelector('#btn-para-submit').click();
+    }, 900);`,
+
+  // the in-design confirm that replaced native confirm() (§4.4)
+  "modal-confirm": `
+    setParentsUnlocked(true);
+    showScreen('parents'); renderParents();
+    document.querySelector('.tab[data-tab="settings"]').click();
+    setTimeout(() => document.querySelector('#set-reset-stats').click(), 200);`,
 
   voice: `showScreen('voice');`,
 
