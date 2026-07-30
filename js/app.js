@@ -22,7 +22,7 @@ import { Store, dayKey, parseWordList } from "./store.js";
    in the corner badge (index.html #app-version) and in the Grown-Ups
    dashboard's Settings tab. Not the same thing as SAVE_VERSION in store.js,
    which versions the save-file *shape*, not the code. */
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.1.1";
 
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -2546,6 +2546,23 @@ function renderResults(s, summary, judges, medal) {
    more likely to break the existing flow than to save time building this.
    ============================================================ */
 
+/* The explorer track's own small "stage" for its preview pane
+   (.letters-preview, shared by Letter Play and Language Play). Before
+   this it was one hardcoded lavender rect no matter what sport a
+   grown-up or the child picked from #home-choose-sport — the milestone
+   skill (skillsForSport(), see the reward branches below) already varied
+   by sport, but nothing about the *screen* did, so the picker read as
+   inert. Setting [data-sport] here just flips CSS custom properties
+   (css/styles.css, "explorer stage" block) — same :root-recolour
+   discipline as the word-mode arena and the story corner — plus a small
+   emoji badge matching the icon already on that sport's home-screen
+   button, so the two screens agree on how each sport is represented. */
+const SPORT_STAGE_EMOJI = { gym: "🤸‍♀️", cheer: "📣", dance: "💃", both: "🌟" };
+function applyExplorerStage(previewEl, badgeEl, sport) {
+  if (previewEl) previewEl.dataset.sport = sport;
+  if (badgeEl) badgeEl.textContent = SPORT_STAGE_EMOJI[sport] || SPORT_STAGE_EMOJI.gym;
+}
+
 const LETTER_ROUND_LEN = 8;
 const LETTER_LEVEL_LABEL = { upper: "Uppercase letters", lower: "Lowercase letters", sound: "Letter sounds" };
 
@@ -2572,6 +2589,7 @@ function startLetterRound() {
   $("#letters-summary").style.display = "none";
   $("#letters-dots").innerHTML = "";
   lettersArena.gymnast.setLook(Store.data.look);
+  applyExplorerStage($("#letters-preview"), $("#letters-stage-badge"), Store.data.settings.sport);
   showScreen("letters");
   sfx.whistle();
   setTimeout(nextLetterItem, 500);
@@ -2815,6 +2833,7 @@ function startLanguageRound(kind) {
   $("#language-dots").innerHTML = "";
   $("#language-title").textContent = LANGUAGE_KIND_LABEL[kind];
   languageArena.gymnast.setLook(Store.data.look);
+  applyExplorerStage($("#language-preview"), $("#language-stage-badge"), Store.data.settings.sport);
   showScreen("language");
   sfx.whistle();
   setTimeout(nextLanguageItem, 500);

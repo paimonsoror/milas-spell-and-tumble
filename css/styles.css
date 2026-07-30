@@ -86,6 +86,25 @@
   --story-cushion-1: #7c3aed;
   --story-cushion-2: #a78bfa;
   --story-cushion-3: #ddd6fe;
+
+  /* ---------- explorer stage (Letter Play / Language Play) ----------
+     Before this, .letters-preview was one hardcoded lavender rect no
+     matter what sport a "Little Learner" picked on the home screen, so
+     the sport picker had no visible effect during play — unlike word
+     mode, where every skill performed is drawn from that sport's own
+     pool. These four pairs key the preview's background wash and mat
+     fill/line so picking a sport actually changes the stage she plays
+     on, same :root-only-recolour rule as the blocks above. "gym" matches
+     the original hardcoded lavender exactly, so the default look is
+     unchanged. */
+  --stage-gym-bg-a: #ede9fe; --stage-gym-bg-b: #fce7f3;
+  --stage-gym-mat: #a78bfa; --stage-gym-line: #7c3aed;
+  --stage-cheer-bg-a: #fff1f2; --stage-cheer-bg-b: #ffe4e6;
+  --stage-cheer-mat: #fb7185; --stage-cheer-line: #e11d48;
+  --stage-dance-bg-a: #fdf2f8; --stage-dance-bg-b: #fce7f3;
+  --stage-dance-mat: #f472b6; --stage-dance-line: #be185d;
+  --stage-both-bg-a: #fefce8; --stage-both-bg-b: #fef9c3;
+  --stage-both-mat: #fbbf24; --stage-both-line: #d97706;
 }
 
 * { box-sizing: border-box; }
@@ -824,13 +843,42 @@ input[type="text"].spell-input.shake { animation: shake .4s ease; }
 
 .letters-preview {
   position: relative;
-  background: linear-gradient(180deg, #ede9fe, #fce7f3);
+  background: linear-gradient(180deg, var(--stage-gym-bg-a), var(--stage-gym-bg-b));
   border: 3px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
   aspect-ratio: 330 / 310;
 }
 .letters-preview svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Sport-themed stage — set via [data-sport] by applyExplorerStage() (js/app.js)
+   whenever a Letter Play / Language Play round starts, reading the same
+   Store.data.settings.sport the home-screen sport picker writes. "gym" has no
+   rule of its own; it's the plain .letters-preview default above. */
+.letters-preview[data-sport="cheer"] { background: linear-gradient(180deg, var(--stage-cheer-bg-a), var(--stage-cheer-bg-b)); }
+.letters-preview[data-sport="dance"] { background: linear-gradient(180deg, var(--stage-dance-bg-a), var(--stage-dance-bg-b)); }
+.letters-preview[data-sport="both"] { background: linear-gradient(180deg, var(--stage-both-bg-a), var(--stage-both-bg-b)); }
+
+.stage-mat { fill: var(--stage-gym-mat); }
+.stage-mat-line { fill: var(--stage-gym-line); }
+.letters-preview[data-sport="cheer"] .stage-mat { fill: var(--stage-cheer-mat); }
+.letters-preview[data-sport="cheer"] .stage-mat-line { fill: var(--stage-cheer-line); }
+.letters-preview[data-sport="dance"] .stage-mat { fill: var(--stage-dance-mat); }
+.letters-preview[data-sport="dance"] .stage-mat-line { fill: var(--stage-dance-line); }
+.letters-preview[data-sport="both"] .stage-mat { fill: var(--stage-both-mat); }
+.letters-preview[data-sport="both"] .stage-mat-line { fill: var(--stage-both-line); }
+
+.stage-badge {
+  position: absolute;
+  top: 8px; left: 8px;
+  z-index: 1;
+  background: rgba(255,255,255,.85);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 20px;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+}
 
 .letters-prompt {
   font-size: clamp(20px, 3.6vw, 30px);

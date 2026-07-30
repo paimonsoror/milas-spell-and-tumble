@@ -458,6 +458,31 @@ tile into the activity) intact; it just makes the one choice that already
 existed for her, and was already being used to pick her reward animations,
 actually hers to make.
 
+**Update, later pass: the sport picker now visibly does something during
+play, not just at the next milestone.** The project owner reported that
+picking a sport on the explorer home screen "doesn't really change
+anything" compared to word mode, which shows a whole differently-lit
+arena. That was correct as far as it went: `skillsForSport()` already
+picked the right pool of reward skills, but the milestone that plays one
+only fires every 4th correct answer in a round (see the reward-cadence
+paragraph above — deliberately not every-answer, so it stays legible
+rather than cheap), and even then, the preview pane it plays in
+(`.letters-preview`, shared by Letter Play and Language Play) was one
+hardcoded lavender rect regardless of sport. So a child could pick
+"Cheerleading" and, for most of a round, see nothing different at all.
+`applyExplorerStage()` (`js/app.js`, just above the Letter Play section)
+now sets `[data-sport]` on that pane every time a round starts
+(`startLetterRound()`/`startLanguageRound()`), which drives a mat-colour
+swap and a small corner badge showing that sport's own icon — the same
+emoji already on its `#home-choose-sport` button — via a new "explorer
+stage" block of `--stage-*` custom properties in `:root`
+(`css/styles.css`), the same recolour-through-`:root` discipline as the
+word-mode arena and the story corner. `gym`'s colours match the original
+hardcoded lavender exactly, so a profile that never touches the picker
+sees no change. This is a purely visual fix — the reward cadence and the
+milestone's own skill selection are untouched, since both were already
+correct and the cadence choice above is deliberate, not the bug.
+
 **Language Play is one screen for two activities, not two screens.** Picking
 "Which Word?" or "Th or F?" from the home grid already picks the activity, so
 `renderLanguageChoices()`/`speakLanguagePrompt()`/`pickLanguageChoice()` branch
