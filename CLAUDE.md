@@ -391,6 +391,27 @@ tap just disables that one choice and lets her keep trying the rest in place —
 no three-strikes climb like the speller track, since that reads as too many
 steps at this age.
 
+**Update, later pass: the explorer track's home screen now has its own
+sport picker.** Both Letter Play's and Language Play's milestone-skill
+animation already read `Store.data.settings.sport` — the same setting the
+speller track's `#screen-setup` writes — but nothing on the explorer side
+ever wrote to it, so a "Little Learner" profile was stuck showing whatever
+sport a grown-up last set (or the `"gym"` default) with no way to change it
+herself. The younger sibling this track was built for asked for the same
+choice the big kids get, directly. Rather than reopening the "no dedicated
+setup screen" call above with a whole new screen, the four sport buttons
+(identical to word-mode's, same icons and blurbs) now live inline on the
+home screen itself, shown only when `Store.data.stage === "explorer"`
+(`#home-sport-field`, toggled the same way `refreshHome()` already toggles
+`.explorer` on `.home-grid`). Picking one calls the same
+`Store.setSetting("sport", ...)` word-mode's setup screen calls, so it's
+the same persisted per-profile value, not a parallel one — Letter Play and
+Language Play needed no changes at all, since they were already reading it.
+This keeps the explorer track's own precedent (jump straight from a home
+tile into the activity) intact; it just makes the one choice that already
+existed for her, and was already being used to pick her reward animations,
+actually hers to make.
+
 **Language Play is one screen for two activities, not two screens.** Picking
 "Which Word?" or "Th or F?" from the home grid already picks the activity, so
 `renderLanguageChoices()`/`speakLanguagePrompt()`/`pickLanguageChoice()` branch
@@ -525,6 +546,32 @@ the still-unclaimed placeholder rather than creating a second profile, and is
 deliberately absent from the "add another player" version of that same
 screen, since linking there would silently overwrite whichever profile
 happens to be active on that device.
+
+**Update, later pass: it's no longer absent there — a real family hit this
+gap.** A household with more than one child playing hits exactly the
+scenario the paragraph above accepted as a limitation: a brand-new device
+can link in *one* existing profile via its code on the first-run screen,
+but every sibling after the first has no path in — "add another player"
+only ever created a brand-new blank profile, so a parent typing a second
+child's name there got an empty profile, not her real one, with no error
+or explanation. `Store.linkAdditionalProfile(code)` (`js/store.js`, next to
+`linkWithCode()`) closes this without touching the unsafe primitive: where
+`linkWithCode()`/`_adoptSnapshot()` intentionally mutate the *active*
+profile in place (correct for the first-run case, since the placeholder
+being overwritten isn't real data yet), `linkAdditionalProfile()` instead
+builds a fresh local profile directly from `blankProfile()` — skipping
+`createProfile()`'s own auto-provisioning so it doesn't push a throwaway
+row to the server first — and adopts the fetched snapshot onto *that*, so
+whichever profile is already active on the device is never touched. The
+"add another player" screen now shows the same "Already playing on another
+device?" code field the first-run screen does; `wireProfiles()`'s handler
+branches on `Store.firstRun` to call the right one. Verified live: cleared
+a real device's storage entirely, linked one profile by code (the
+first-run path, unchanged), then used the *new* path to bring a second,
+different profile onto that same already-claimed device without touching
+the first — both profiles showed up correctly on the picker screen
+afterward. Re-linking a code already present on this device switches to
+the existing local copy rather than creating a duplicate.
 
 **The `/admin` page is a household-owner tool, not a player-facing surface.**
 It's server-rendered by `server/index.js` (`GET /admin`, plus a small

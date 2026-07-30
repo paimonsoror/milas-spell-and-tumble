@@ -771,6 +771,40 @@ const Store = {
     }
   },
 
+  /* Same fetch as linkWithCode() above, but safe to offer on a device that
+     already has at least one claimed profile — the "add another player"
+     screen's own "Already playing on another device?" option. linkWithCode()
+     deliberately mutates the *active* profile in place (see _adoptSnapshot's
+     comment), which is exactly why it was never wired up there: typing a
+     second child's code on a device that already has one claimed would
+     silently overwrite whoever's currently active. This instead builds a
+     brand-new local profile directly from blankProfile() — not
+     createProfile(), which auto-provisions and pushes a throwaway sync code
+     we'd only immediately discard — and adopts the fetched snapshot onto
+     that new profile, so nothing already on this device is touched. If the
+     code is already linked here (someone fat-fingers a code they already
+     have), returns the existing local copy instead of creating a duplicate. */
+  async linkAdditionalProfile(code) {
+    const existing = this.profiles().find((p) => p.sync && p.sync.code === code);
+    if (existing) return { ok: true, profile: existing, alreadyHere: true };
+    try {
+      const res = await fetch(`/api/profiles/${code}`);
+      if (!res.ok) return { ok: false };
+      const { snapshot } = await res.json();
+      const fresh = blankProfile();
+      this.file.profiles[fresh.id] = fresh;
+      this.file.order.push(fresh.id);
+      this._adoptSnapshot(snapshot, fresh);
+      fresh.sync.code = code;
+      fresh.sync.localOnly = false;
+      fresh.sync.lastSyncedAt = Date.now();
+      this.save();
+      return { ok: true, profile: fresh };
+    } catch {
+      return { ok: false };
+    }
+  },
+
   /* The push/pull round trip. No-ops silently if this profile hasn't been
      provisioned (or was deliberately set local-only), or the server isn't
      reachable. Takes an explicit profile, defaulting to the active one, so

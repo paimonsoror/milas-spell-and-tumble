@@ -164,6 +164,7 @@ async function init() {
 
   wireNav();
   wireSetup();
+  wireHomeSport();
   wireGame();
   wireStudio();
   wireLetters();
@@ -590,6 +591,9 @@ function refreshHome() {
   // nothing here rebuilds the tile markup.
   const grid = $(".home-grid");
   if (grid) grid.classList.toggle("explorer", Store.data.stage === "explorer");
+  const sportField = $("#home-sport-field");
+  if (sportField) sportField.classList.toggle("show", Store.data.stage === "explorer");
+  syncHomeSportButtons();
   const m = Store.data.medals;
   const b = Store.data.best;
   const parts = [];
@@ -648,27 +652,46 @@ function wireProfiles() {
     showScreen("home");
   });
 
-  // Only reachable on the first-run screen (see renderProfiles()) — linking
-  // here replaces the still-unclaimed placeholder profile, which is exactly
-  // what a brand-new device should do with an existing profile's code.
-  // Elsewhere (adding a second player on a device that already has real
-  // profiles) this button doesn't exist, since linking there would silently
-  // overwrite whichever profile happens to be active — a much more
-  // surprising thing to do from an "add a player" flow.
+  // On the first-run screen, linking replaces the still-unclaimed placeholder
+  // profile — exactly what a brand-new, never-opened device should do with
+  // an existing profile's code. Elsewhere (adding a second player on a
+  // device that already has real profiles) linkWithCode() would silently
+  // overwrite whichever profile happens to be active, so that path instead
+  // goes through Store.linkAdditionalProfile(), which builds a brand-new
+  // local profile and adopts the fetched snapshot onto that — the profile
+  // already active on this device is never touched either way. See its own
+  // comment in js/store.js, and CLAUDE.md for why this used to be
+  // first-run-only and no longer is.
   $("#profile-new").addEventListener("click", async (e) => {
     if (!e.target.closest("#btn-profile-link")) return;
     const code = $("#profile-link-code").value.trim().toUpperCase();
     if (!code) return toast("Type a code first.");
-    const ok = await Store.linkWithCode(code);
-    if (ok) {
-      Store.firstRun = false; // the placeholder is now a real, claimed profile
-      applyProfileSettings();
-      sfx.fanfare("bronze");
-      toast(`Welcome back, ${playerName()}! ⭐`);
-      showScreen("home");
-    } else {
-      toast("Couldn't find that code — check it and try again.");
+    if (Store.firstRun) {
+      const ok = await Store.linkWithCode(code);
+      if (ok) {
+        Store.firstRun = false; // the placeholder is now a real, claimed profile
+        applyProfileSettings();
+        sfx.fanfare("bronze");
+        toast(`Welcome back, ${playerName()}! ⭐`);
+        showScreen("home");
+      } else {
+        toast("Couldn't find that code — check it and try again.");
+      }
+      return;
     }
+    const result = await Store.linkAdditionalProfile(code);
+    if (!result.ok) {
+      toast("Couldn't find that code — check it and try again.");
+      return;
+    }
+    sfx.fanfare("bronze");
+    toast(
+      result.alreadyHere
+        ? `${result.profile.name} is already on this device.`
+        : `Brought ${result.profile.name} here! Pick her name above to play.`
+    );
+    $("#profile-link-code").value = "";
+    renderProfiles();
   });
 }
 
@@ -716,20 +739,19 @@ function renderProfiles() {
       <button class="btn" id="btn-profile-create">${first ? "Let's go! 🎀" : "＋ Add player"}</button>
     </div>
     ${first ? "" : '<div class="row center" style="margin-top:10px"><button class="btn ghost small" data-go="home">← Back</button></div>'}
-    ${
-      first
-        ? `<div class="field" style="margin-top:18px;border-top:1px solid var(--line,#e5e5e5);padding-top:14px">
-             <label>Already playing on another device?</label>
-             <p class="muted" style="font-size:13px;margin:2px 0 8px">
-               Bring that profile here with its code, instead of starting a new one.</p>
-             <div class="row">
-               <input type="text" class="text-line" id="profile-link-code" maxlength="6"
-                      placeholder="ABC123" style="width:140px;text-transform:uppercase">
-               <button class="btn small ghost" id="btn-profile-link">Link this device</button>
-             </div>
-           </div>`
-        : ""
-    }`;
+    <div class="field" style="margin-top:18px;border-top:1px solid var(--line,#e5e5e5);padding-top:14px">
+      <label>Already playing on another device?</label>
+      <p class="muted" style="font-size:13px;margin:2px 0 8px">
+        ${first
+          ? "Bring that profile here with its code, instead of starting a new one."
+          : "Bring another profile here with its code — Mila, Layla, whoever's already playing elsewhere."}
+      </p>
+      <div class="row">
+        <input type="text" class="text-line" id="profile-link-code" maxlength="6"
+               placeholder="ABC123" style="width:140px;text-transform:uppercase">
+        <button class="btn small ghost" id="btn-profile-link">Link this device</button>
+      </div>
+    </div>`;
 
   // resets on every render — a new profile always starts from "Big Kid"
   // pre-selected, so an existing parent adding a second, older player never
@@ -876,6 +898,28 @@ function renderGradeChoices() {
       `<button class="choice" data-list="${l.id}"><span class="emoji">📝</span><b>${escapeHtml(l.name)}</b><small>${l.words.length} words</small></button>`
   );
   wrap.innerHTML = built.concat(custom).join("");
+}
+
+/* The explorer track's own sport picker, on the home screen (see
+   css/styles.css for why it lives there rather than a new screen). Reads
+   and writes the exact same Store.data.settings.sport that the speller
+   track's setup screen does — Letter Play's and Language Play's milestone
+   skill (skillsForSport(Store.data.settings.sport), see startLetterRound's
+   and pickLanguageChoice's reward branches) already reads that setting, it
+   just had no explorer-facing way to change it before now. */
+function syncHomeSportButtons() {
+  $$("#home-choose-sport .choice").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.sport === Store.data.settings.sport))
+  );
+}
+
+function wireHomeSport() {
+  $("#home-choose-sport").addEventListener("click", (e) => {
+    const b = e.target.closest(".choice");
+    if (!b) return;
+    Store.setSetting("sport", b.dataset.sport);
+    syncHomeSportButtons();
+  });
 }
 
 function syncSetupButtons() {

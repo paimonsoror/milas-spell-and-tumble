@@ -231,6 +231,17 @@ p { margin: 0 0 .8em; line-height: 1.5; }
 .home-grid.explorer .stage-speller { display: none; }
 .home-grid:not(.explorer) .stage-explorer { display: none; }
 
+/* the explorer track's own sport picker — same four choices the speller
+   track's setup screen offers, so a "Little Learner" can pick her sport
+   too (a real kid asked for this; see CLAUDE.md). Hidden by default and
+   shown only for stage === "explorer" profiles; refreshHome() toggles
+   .show the same way it toggles .explorer on .home-grid above, rather
+   than a new screen — the explorer track's whole precedent is jumping
+   straight from a home tile into the activity, and this keeps that true
+   by putting the one choice she needs right on the home screen itself. */
+.home-sport-field { display: none; }
+.home-sport-field.show { display: block; }
+
 /* ---------- coach's voice ---------- */
 
 .voice-grid {
