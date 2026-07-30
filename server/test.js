@@ -184,6 +184,69 @@ async function httpTests() {
   const afterLogout = await req("GET", "/api/admin/overview", null, cookie);
   ok(afterLogout.status === 401, "the session cookie is invalid after logout");
 
+  /* ---- household directory + PIN gate (docs/HANDOFF-ARCHITECTURE.md's dated addendum) ---- */
+
+  await req("POST", "/api/profiles/PINME1/sync", { snapshot: JSON.stringify({ name: "Pinny", stars: 3 }), updatedAt: 1000 });
+
+  const dirBefore = await req("GET", "/api/profiles");
+  ok(dirBefore.status === 200 && Array.isArray(dirBefore.body), "GET /api/profiles returns an array");
+  let entry = dirBefore.body.find((p) => p.code === "PINME1");
+  ok(!!entry, "the directory includes a synced profile");
+  ok(entry.name === "Pinny" && entry.stars === 3, "the directory reflects name/stars from the snapshot");
+  ok(entry.hasPin === false, "a freshly-synced profile has no pin yet");
+  ok(!("pin_hash" in entry) && !("pinHash" in entry), "the directory never exposes the pin hash");
+
+  const badPin = await req("POST", "/api/profiles/PINME1/pin", { pin: "ab" });
+  ok(badPin.status === 400, "claiming a too-short pin is rejected with 400");
+
+  const unknownClaim = await req("POST", "/api/profiles/NOROW1/pin", { pin: "1234" });
+  ok(unknownClaim.status === 404, "claiming a pin for an unknown code is rejected with 404");
+
+  const claim = await req("POST", "/api/profiles/PINME1/pin", { pin: "1234" });
+  ok(claim.status === 200 && claim.body.ok === true, "claiming a pin on a fresh profile succeeds");
+
+  const dirAfter = await req("GET", "/api/profiles");
+  entry = dirAfter.body.find((p) => p.code === "PINME1");
+  ok(entry.hasPin === true, "the directory reflects hasPin after a claim");
+
+  const claimAgain = await req("POST", "/api/profiles/PINME1/pin", { pin: "5678" });
+  ok(claimAgain.status === 409, "claiming a pin a second time is rejected with 409 (claim-only, not change)");
+
+  const unlockUnknown = await req("POST", "/api/profiles/NOROW1/unlock", { pin: "1234" });
+  ok(unlockUnknown.status === 404, "unlocking a code with no stored row at all returns 404");
+
+  await req("POST", "/api/profiles/NOPIN01/sync", { snapshot: JSON.stringify({ name: "NoPin" }), updatedAt: 1000 });
+  const unlockBeforeClaim = await req("POST", "/api/profiles/NOPIN01/unlock", { pin: "1234" });
+  ok(unlockBeforeClaim.status === 409, "unlocking a profile that exists but has no pin set yet returns 409");
+
+  const wrongPin = await req("POST", "/api/profiles/PINME1/unlock", { pin: "0000" });
+  ok(wrongPin.status === 401, "unlocking with the wrong pin returns 401");
+
+  const rightPin = await req("POST", "/api/profiles/PINME1/unlock", { pin: "1234" });
+  ok(rightPin.status === 200, "unlocking with the right pin returns 200");
+  ok(rightPin.body.code === "PINME1" && typeof rightPin.body.updatedAt === "number", "unlock response carries code + updatedAt");
+  ok(typeof rightPin.body.snapshot === "string" && JSON.parse(rightPin.body.snapshot).name === "Pinny",
+    "unlock response carries the stored snapshot");
+
+  /* ---- rate limiting: 5 wrong pins locks the code out ---- */
+  await req("POST", "/api/profiles/LOCKME1/sync", { snapshot: JSON.stringify({ name: "Lockme" }), updatedAt: 1000 });
+  await req("POST", "/api/profiles/LOCKME1/pin", { pin: "9999" });
+  for (let i = 0; i < 5; i++) {
+    await req("POST", "/api/profiles/LOCKME1/unlock", { pin: "0000" });
+  }
+  const lockedOut = await req("POST", "/api/profiles/LOCKME1/unlock", { pin: "9999" }); // even the RIGHT pin is blocked while locked out
+  ok(lockedOut.status === 429, "5 wrong attempts locks the code out, rejecting even a correct pin until it expires");
+
+  /* ---- server-side duplicate-name guard on /sync (defense-in-depth) ---- */
+  await req("POST", "/api/profiles/DUPE01/sync", { snapshot: JSON.stringify({ name: "Sameness" }), updatedAt: 1000 });
+  const dupeReject = await req("POST", "/api/profiles/DUPE02/sync", { snapshot: JSON.stringify({ name: "  sameness " }), updatedAt: 2000 });
+  ok(dupeReject.status === 409, "a sync push whose name collides (trim/case-insensitive) with a different row is rejected");
+  const dupeMissing = await req("GET", "/api/profiles/DUPE02");
+  ok(dupeMissing.status === 404, "the rejected duplicate-name push was never stored");
+
+  const resyncSameName = await req("POST", "/api/profiles/DUPE01/sync", { snapshot: JSON.stringify({ name: "Sameness", stars: 9 }), updatedAt: 3000 });
+  ok(resyncSameName.status === 200, "a profile re-syncing its own unchanged name is not treated as a collision with itself");
+
   server.close();
 }
 

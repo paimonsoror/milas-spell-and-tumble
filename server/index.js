@@ -61,6 +61,117 @@ function backupStats() {
 
 const CODE_RE = /^[A-Z0-9]{4,12}$/;
 
+/* ---- household profile directory + PIN gate ----
+   See docs/HANDOFF-ARCHITECTURE.md's dated addendum for the why. PINs are
+   hashed with Node's built-in crypto.scryptSync — no new dependency, same
+   reasoning as this server's zero-npm-deps rule (see package.json). A
+   random per-profile salt is stored alongside the hash as "salt:hash" in
+   the one pin_hash column, verified with crypto.timingSafeEqual — the same
+   pattern passwordMatches() already uses for the admin password above. */
+function hashPin(pin) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(pin, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPin(pin, stored) {
+  if (typeof stored !== "string") return false;
+  const sep = stored.indexOf(":");
+  if (sep === -1) return false;
+  const salt = stored.slice(0, sep);
+  const hashHex = stored.slice(sep + 1);
+  let candidate;
+  try {
+    candidate = crypto.scryptSync(pin, salt, 64);
+  } catch {
+    return false;
+  }
+  const stored64 = Buffer.from(hashHex, "hex");
+  return stored64.length === candidate.length && crypto.timingSafeEqual(stored64, candidate);
+}
+
+function pinLooksValid(pin) {
+  return typeof pin === "string" && pin.length >= 4 && pin.length <= 8;
+}
+
+/* Best-effort speed bump against PIN guessing, not real security — this is
+   an in-memory, per-process counter with no persistence and no distinction
+   between IPs, appropriate to a household tool behind a home LAN, not a
+   public auth boundary. 5 wrong PINs for one profile code locks that code
+   out for a minute; a successful unlock (or the lockout naturally expiring)
+   clears it. */
+const UNLOCK_MAX_ATTEMPTS = 5;
+const UNLOCK_LOCKOUT_MS = 60 * 1000;
+const unlockAttempts = new Map(); // code -> { count, lockedUntil }
+
+function isUnlockLocked(code) {
+  const entry = unlockAttempts.get(code);
+  if (!entry || !entry.lockedUntil) return false;
+  if (Date.now() >= entry.lockedUntil) {
+    unlockAttempts.delete(code); // lockout window passed — start clean
+    return false;
+  }
+  return true;
+}
+
+function recordUnlockFailure(code) {
+  const entry = unlockAttempts.get(code) || { count: 0, lockedUntil: null };
+  entry.count++;
+  if (entry.count >= UNLOCK_MAX_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + UNLOCK_LOCKOUT_MS;
+    entry.count = 0;
+  }
+  unlockAttempts.set(code, entry);
+}
+
+function recordUnlockSuccess(code) {
+  unlockAttempts.delete(code);
+}
+
+/* Lean directory for the household profile picker (js/app.js's
+   renderProfiles()) — every synced profile's name/stars/medals/streak plus
+   whether it's PIN-protected yet, never the hash itself. Tolerant of a row
+   that fails to parse, same reasoning as buildOverview() above: report it
+   rather than crash the whole endpoint over one bad row. Unauthenticated,
+   same as every other /api/profiles route — this app's threat model is
+   "internal household use only" (see docs/HANDOFF-ARCHITECTURE.md), and the
+   directory is exactly what the picker screen needs to show cards before a
+   PIN is even entered. */
+function buildDirectory() {
+  return store.listAll().map((row) => {
+    const updatedAt = Number(row.updated_at);
+    const hasPin = row.pin_hash != null;
+    try {
+      const p = JSON.parse(row.snapshot);
+      return {
+        code: row.code,
+        name: p.name || null,
+        stars: p.stars || 0,
+        medals: p.medals || null,
+        dayStreak: (p.visit && p.visit.dayStreak) || 0,
+        hasPin,
+        updatedAt
+      };
+    } catch {
+      return { code: row.code, name: null, stars: 0, medals: null, dayStreak: 0, hasPin, updatedAt, parseError: true };
+    }
+  });
+}
+
+/* Normalizes a name for comparison the same way js/app.js's client-side
+   duplicate-name guard does: trim + lowercase. Defense-in-depth for the
+   incident this pass fixes (three "Mila"/four "Layla" duplicate rows in the
+   live database) — the client already blocks creating a second profile
+   whose name collides with one already in the fetched directory, but that's
+   a point-in-time check, not a guarantee. Deliberately simple, matching
+   this project's existing "timestamp-wins, not a real conflict system"
+   spirit: a genuine race between two devices creating the same name at the
+   same instant is an accepted edge case here, same as everywhere else in
+   this sync design. */
+function normalizeName(name) {
+  return typeof name === "string" ? name.trim().toLowerCase() : "";
+}
+
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) });
@@ -235,6 +346,13 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Household directory for the profile picker (js/app.js renderProfiles()).
+    // Sits ahead of the /api/profiles/:code block below: this one matches
+    // exactly two path segments (no code), that one requires a third.
+    if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 2) {
+      return sendJson(res, 200, buildDirectory());
+    }
+
     if (parts[0] === "api" && parts[1] === "profiles" && parts[2]) {
       const code = parts[2].toUpperCase();
       if (!CODE_RE.test(code)) return sendJson(res, 400, { error: "invalid code" });
@@ -256,8 +374,80 @@ const server = http.createServer(async (req, res) => {
         if (typeof payload.snapshot !== "string" || !Number.isFinite(payload.updatedAt)) {
           return sendJson(res, 400, { error: "expected { snapshot: string, updatedAt: number }" });
         }
+
+        // Defense-in-depth against the duplicate-name incident (see
+        // buildDirectory()'s comment above and docs/HANDOFF-ARCHITECTURE.md's
+        // dated addendum): reject a push whose name collides with a
+        // *different* existing profile's name, rather than silently storing
+        // a second row under a name that's already taken.
+        let incomingName = null;
+        try {
+          incomingName = JSON.parse(payload.snapshot).name;
+        } catch {
+          incomingName = null; // malformed snapshot JSON — let reconcile() below store/report it as-is
+        }
+        const normalizedIncoming = normalizeName(incomingName);
+        if (normalizedIncoming) {
+          const collision = store.listAll().some((row) => {
+            if (row.code === code) return false; // this profile's own re-sync of its own name is not a collision
+            try {
+              return normalizeName(JSON.parse(row.snapshot).name) === normalizedIncoming;
+            } catch {
+              return false;
+            }
+          });
+          if (collision) {
+            return sendJson(res, 409, { error: "name already taken", name: incomingName });
+          }
+        }
+
         const result = store.reconcile(code, payload.snapshot, payload.updatedAt);
         return sendJson(res, 200, result);
+      }
+
+      // Claim-only: sets a PIN the first time, never changes one that's
+      // already set. A "change my PIN" or "forgot my PIN" flow is
+      // deliberately out of scope for this pass — see the dated addendum in
+      // docs/HANDOFF-ARCHITECTURE.md for why that's a real product decision
+      // for the project owner, not something to guess at here.
+      if (req.method === "POST" && parts[3] === "pin") {
+        const raw = await readBody(req);
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          return sendJson(res, 400, { error: "invalid json" });
+        }
+        const row = store.get(code);
+        if (!row) return sendJson(res, 404, { error: "not found" });
+        if (store.getPinHash(code)) return sendJson(res, 409, { error: "pin already set" });
+        if (!pinLooksValid(payload.pin)) return sendJson(res, 400, { error: "pin must be 4-8 characters" });
+        const claimed = store.claimPin(code, hashPin(payload.pin));
+        if (!claimed) return sendJson(res, 409, { error: "pin already set" }); // lost a race with a concurrent claim
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (req.method === "POST" && parts[3] === "unlock") {
+        if (isUnlockLocked(code)) {
+          return sendJson(res, 429, { error: "too many attempts — try again in a minute" });
+        }
+        const raw = await readBody(req);
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          return sendJson(res, 400, { error: "invalid json" });
+        }
+        const row = store.get(code);
+        if (!row) return sendJson(res, 404, { error: "not found" });
+        const pinHash = store.getPinHash(code);
+        if (!pinHash) return sendJson(res, 409, { error: "no pin set" });
+        if (!verifyPin(payload.pin, pinHash)) {
+          recordUnlockFailure(code);
+          return sendJson(res, 401, { error: "wrong pin" });
+        }
+        recordUnlockSuccess(code);
+        return sendJson(res, 200, { code, updatedAt: row.updatedAt, snapshot: row.snapshot });
       }
 
       if (req.method === "DELETE" && parts.length === 3) {

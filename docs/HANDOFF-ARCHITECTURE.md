@@ -331,3 +331,180 @@ shared datastore — no shared Postgres exists in this cluster, and the scale
 calibration in §1 is completely unchanged by any of this. Retiring §8.1 was
 about where the game runs and how its state is authoritative, not about how
 many users it serves.
+
+## 12. Third pass — a real incident, and PIN-gated profile selection
+
+This pass was triggered by an actual data-integrity incident, not a planned
+follow-up. The live database (11 rows) had accumulated three "Mila" profiles
+and four "Layla" profiles — mostly empty accidental duplicates — plus one row
+literally named "Vak3ns", because someone had typed a pairing code into the
+plain-text "name" field on the "add another player" screen, which was the
+only input that screen offered. The root cause: "add another player" always
+called `createProfile()` and built a brand-new blank profile. There was no
+path to bring an *existing* profile to a new or cleared device except typing
+its exact 6-character code into a small text field — a code nobody in the
+household had memorized, so in practice every new device just got named
+again, and the household's data fragmented across more and more empty rows.
+Cleaning up the existing duplicates was explicitly left to the project
+owner, via the existing `/admin` page — this pass does not delete, merge, or
+rename any existing server row, by deliberate scope decision.
+
+**What shipped: a household profile directory, PIN-gated selection.** The
+project owner's own framing: "I like the pin system. The profiles should be
+shown, but to actually select they need to use a pin (or set one if it
+wasn't set, for example the existing profiles)." Concretely:
+
+- `server/db.js`'s `profiles` table gained a nullable `pin_hash TEXT`
+  column. Since `CREATE TABLE IF NOT EXISTS` is a no-op against the already-
+  existing 11-row live table, `openDb()` also runs an `ALTER TABLE ... ADD
+  COLUMN`, wrapped in a try/catch that treats "duplicate column name" as
+  success — safe against both a brand-new database (which already has the
+  column from the `CREATE TABLE` itself) and the real deployed one. Every
+  pre-existing row ends up with `pin_hash = NULL`, meaning "no PIN claimed
+  yet" — true of every profile that existed before this pass, by
+  construction.
+- PINs are hashed with Node's built-in `crypto.scryptSync(pin, salt, 64)`
+  (a random salt per profile, stored as `salt:hash` in the one column) and
+  verified with `crypto.timingSafeEqual` — the exact same pattern
+  `passwordMatches()` already used for the admin password, and zero new
+  dependencies, matching this server's existing zero-npm-deps rule.
+- Three new routes, all in `server/index.js`: `GET /api/profiles` (a lean,
+  unauthenticated directory — `{ code, name, stars, medals, dayStreak,
+  hasPin, updatedAt }` per row, never the hash itself), `POST
+  /api/profiles/:code/pin` (claim-only — 404 unknown code, 409 if a PIN is
+  already set, 400 on a bad PIN shape, otherwise hashes and stores it), and
+  `POST /api/profiles/:code/unlock` (verifies a PIN and, on success, returns
+  the same `{ code, updatedAt, snapshot }` shape `GET /api/profiles/:code`
+  already returns, so the client's adoption logic could be shared). All
+  three are unauthenticated, same as every other `/api/profiles` route —
+  this app's threat model has always been "internal household use only,"
+  not a public auth boundary, and the two existing machine-to-machine sync
+  routes (plain `GET /api/profiles/:code`, `POST /api/profiles/:code/sync`,
+  used by `Store.reconcileSync()`/`Store.syncOnBoot()`) were not touched at
+  all — the PIN gate is specifically for the human "which profile am I"
+  moment, not the background sync loop.
+- `/unlock` carries an in-memory, per-process rate limit (5 wrong PINs locks
+  a code out for a minute) — a comment in `server/index.js` is explicit that
+  this is a best-effort speed bump appropriate to a household tool behind a
+  home LAN, not a claim of real security. It has no persistence and resets
+  on a server restart, same reasoning as the admin session `Set`.
+- **Why PINs, not something heavier:** an account system (email/password,
+  OAuth) is exactly what this project has deliberately avoided for a child
+  user from the start (see §7's own reasoning). A short numeric PIN, shown
+  as a card the household already recognizes by name/stars/medals rather
+  than a bare code, is proportionate to "stop a kid from picking the wrong
+  sibling's profile or overwriting it by accident" — which is the actual
+  failure mode this incident exposed — without pretending to be real
+  authentication against an outside attacker. It's also literally what the
+  project owner asked for.
+- **Client (`js/store.js`):** `Store.fetchDirectory()` wraps `GET
+  /api/profiles`, returning `[]` on any failure rather than throwing, same
+  as every other sync call in this file. `Store.claimPin()`/
+  `Store.unlockProfile()` wrap the two new routes.  `unlockProfile()`
+  reuses the exact dedup guard `linkAdditionalProfile()` used to have (an
+  already-linked code reuses its existing local profile rather than
+  duplicating it) but, unlike that function, also switches the active
+  profile — a human just explicitly picked a name and typed a PIN, which is
+  a deliberate "play as her now" action. `linkAdditionalProfile()` itself
+  is retired (no caller survives it); `linkWithCode()` is **not** retired —
+  it's still the mechanism behind the Settings tab's "already have this
+  profile's code" re-link flow for an already-claimed device, which is a
+  different, still-valid feature this pass didn't touch.
+- **Client (`js/app.js`, `css/styles.css`):** `renderProfiles()`/
+  `wireProfiles()` were rewritten. The picker (both the first-run version
+  and the "switch player" version — they now share one code path) fetches
+  the household directory every time it opens and renders every row as a
+  card, merged with any purely local `sync.localOnly` profiles on this
+  device (those deliberately never have a server row — see
+  `blankProfile()`'s own comment — so they'd otherwise vanish from the
+  list entirely). Clicking a card with `hasPin: true` opens an inline PIN
+  box; clicking one with `hasPin: false` opens an inline "set a PIN for
+  {name}" box instead — both styled after the Grown-Ups dashboard's own
+  math gate (`renderGate()`) for visual consistency, not a new bespoke
+  component. The old "Already playing on another device? [CODE] [Link this
+  device]" text field is gone entirely, superseded by the directory itself.
+  Creating a brand-new profile (first-run "Let's go" or "+ Add player") now
+  also asks for a PIN as part of the same form, and claims it in the
+  background right after the profile's pairing code is confirmed to exist
+  on the server (an explicit `reconcileSync()` call first, since
+  `_autoProvisionSync()`'s own push is fire-and-forget and the row might
+  not have landed yet) — best-effort: if the server isn't reachable at
+  profile-creation time, she still gets to play immediately, and the very
+  next time a grown-up picks her from the directory, the same "no PIN yet"
+  retrofit prompt an old profile gets covers it.
+- **Local-only profiles are deliberately never PIN-gated.** They have no
+  server row by definition (that's what local-only means), so there's
+  nothing to hang a server-verified PIN off of. Selecting one from the
+  picker just switches to it directly, exactly like every card behaved
+  before this pass. A future pass could invent a client-only PIN for this
+  case; nobody asked for it, and the risk it protects against (mixing up
+  which profile is active on one shared, offline-only device) is smaller
+  than what motivated this pass in the first place.
+
+**Duplicate-name prevention**, the direct fix for tonight's actual incident:
+
+- **Client-side**: before creating any profile, the typed name is trimmed,
+  lowercased, and checked against every name already known to this device —
+  the fetched directory rows plus every local profile (`nameCollides()` in
+  `js/app.js`). A collision blocks creation with an inline message ("That
+  name's already taken — try another, or find them in the list above")
+  instead of silently producing a duplicate. The one deliberate carve-out:
+  the first-run "Let's go" flow renames the still-unclaimed placeholder
+  profile in place rather than creating a new one (existing precedent,
+  unrelated to this pass), so the collision check excludes that placeholder
+  from the local comparison — otherwise typing the default "Player 1" back
+  as your own name would flag itself as a collision.
+- **Server-side, defense-in-depth**: `POST /api/profiles/:code/sync` now
+  parses the incoming snapshot's `name`, normalizes it the same way, and
+  rejects the push with `409 { error: "name already taken", name }` if any
+  *other* row already has that name. `Store.reconcileSync()` surfaces this
+  as a distinct, readable `sync.lastError` ("another profile is already
+  named "X" — rename this one to sync again") rather than the generic
+  "sync failed (409)" every other non-2xx status gets, so a parent checking
+  Settings can actually tell what happened and act on it. This is
+  deliberately simple, matching this project's existing "timestamp-wins,
+  not a real conflict system" spirit (§7, §11 above) — a genuine race
+  between two devices creating the same name at the same instant is an
+  accepted edge case here, same as everywhere else in this sync design. It
+  is **not** retroactive: the household's existing duplicate "Mila"/"Layla"
+  rows keep syncing exactly as before (their own re-syncs never collide
+  with themselves), and cleaning those up is still the project owner's own
+  job via `/admin`, untouched by this pass.
+
+**Verification.** `node server/test.js` covers the directory endpoint
+reflecting `hasPin` before/after a claim, claiming a PIN (fresh profile,
+then a second claim 409ing), unlocking with the right/wrong/no-PIN-yet PIN,
+an unknown code, the rate limit actually tripping after 5 wrong attempts
+(rejecting even the *correct* PIN while locked out), and the sync
+duplicate-name guard (rejecting a collision, allowing a profile to re-sync
+its own unchanged name). `node tests/check.js`, `npm run build`, and `npm
+run typecheck` were all re-run clean — typecheck's pre-existing 22 errors
+(untyped `SKILL_BY_ID`, `window.__app`, etc., all present in the exact same
+form in the pre-this-pass `HEAD` commit) are unchanged in count and kind;
+nothing new was introduced.
+
+**Deliberately deferred, on purpose:**
+
+- **A "change my PIN" or "forgot my PIN" flow.** The claim-only route is
+  intentional — this pass only had to solve "every existing profile has no
+  PIN yet," not "a PIN was set and needs to change." A recovery story for a
+  forgotten PIN on a household tool (email reset doesn't exist here; SMS
+  doesn't either) is a real product decision the project owner should make
+  deliberately — e.g. "the admin page can clear a PIN" — rather than
+  something to guess at while fixing a duplicate-profile incident.
+- **Ghost placeholder rows.** `Store._autoProvisionSync()` (unchanged by
+  this pass, and out of scope to change) pushes a profile's first snapshot
+  to the server the moment `load()` runs, *before* a first-run visitor has
+  typed a real name — meaning a "Player 1" row can land on the server from
+  someone who opened the game once and never named themselves. This is
+  very likely a real contributor to the duplicate-row count in the live
+  database, and the new directory now makes those rows visible as cards
+  too. Worth a future pass revisiting whether `_autoProvisionSync()` should
+  wait for a real name before its first push — not fixed here, since it's a
+  different mechanism than the one this pass was scoped to (profile
+  *selection*, not profile *provisioning*), and changing it risks the same
+  "load() must stay side-effect-free" invariant documented in CLAUDE.md's
+  bug-fix list.
+- **Cleaning up the 11 existing rows.** Explicitly the project owner's own
+  job via the existing `/admin` page, per their own instruction. No code in
+  this pass deletes, merges, or renames a server row.

@@ -46,6 +46,14 @@ let paragraphSession = null;
 let lastFinishedActivity = "spelling";
 let lastParaMode = "practice"; // remembered for "Again!" on the results screen
 let newProfileStage = "speller"; // set by the picker in renderProfiles(), read when a profile is created
+// the household directory last fetched by renderProfiles() (server rows plus
+// any merged-in local-only profiles) — cached here so click handlers on
+// #profile-list don't need to re-fetch, see loadProfileDirectory()
+let profileDirectory = [];
+// which directory row's inline PIN (or "set a PIN") form is currently open
+// on the picker screen, keyed by server `code` — null means none is open.
+// Reset to null on every renderProfiles() call, same as newProfileStage.
+let pinFlowCode = null;
 let parentsUnlocked = false;
 // true only in the ?code=XXXXXX remote-view boot path (see initRemoteView) —
 // a parent looking at a synced profile from another device, read-only,
@@ -612,116 +620,165 @@ function refreshHome() {
    profiles
    ============================================================ */
 
-function wireProfiles() {
-  $("#btn-switch-player").addEventListener("click", () => {
-    Store.firstRun = false;
-    showScreen("profiles");
-  });
-
-  $("#profile-list").addEventListener("click", (e) => {
-    const card = e.target.closest("[data-profile]");
-    if (!card) return;
-    Store.switchProfile(card.dataset.profile);
-    applyProfileSettings();
-    sfx.star();
-    toast(`Hi ${playerName()}! 👋`);
-    showScreen("home");
-  });
-
-  $("#profile-new").addEventListener("click", (e) => {
-    if (!e.target.closest("#btn-profile-create")) return;
-    const input = $("#profile-name");
-    const name = input.value.trim();
-    if (!name) {
-      input.focus();
-      toast("Type a name first.");
-      return;
-    }
-    if (Store.firstRun) {
-      // the blank first-run profile gets named rather than duplicated
-      Store.renameProfile(Store.file.activeId, name);
-      Store.setStage(newProfileStage);
-      Store.firstRun = false;
-    } else {
-      const p = Store.createProfile(name, newProfileStage);
-      Store.switchProfile(p.id);
-    }
-    applyProfileSettings();
-    sfx.fanfare("bronze");
-    toast(`Welcome, ${name}! ⭐`);
-    showScreen("home");
-  });
-
-  // On the first-run screen, linking replaces the still-unclaimed placeholder
-  // profile — exactly what a brand-new, never-opened device should do with
-  // an existing profile's code. Elsewhere (adding a second player on a
-  // device that already has real profiles) linkWithCode() would silently
-  // overwrite whichever profile happens to be active, so that path instead
-  // goes through Store.linkAdditionalProfile(), which builds a brand-new
-  // local profile and adopts the fetched snapshot onto that — the profile
-  // already active on this device is never touched either way. See its own
-  // comment in js/store.js, and CLAUDE.md for why this used to be
-  // first-run-only and no longer is.
-  $("#profile-new").addEventListener("click", async (e) => {
-    if (!e.target.closest("#btn-profile-link")) return;
-    const code = $("#profile-link-code").value.trim().toUpperCase();
-    if (!code) return toast("Type a code first.");
-    if (Store.firstRun) {
-      const ok = await Store.linkWithCode(code);
-      if (ok) {
-        Store.firstRun = false; // the placeholder is now a real, claimed profile
-        applyProfileSettings();
-        sfx.fanfare("bronze");
-        toast(`Welcome back, ${playerName()}! ⭐`);
-        showScreen("home");
-      } else {
-        toast("Couldn't find that code — check it and try again.");
-      }
-      return;
-    }
-    const result = await Store.linkAdditionalProfile(code);
-    if (!result.ok) {
-      toast("Couldn't find that code — check it and try again.");
-      return;
-    }
-    sfx.fanfare("bronze");
-    toast(
-      result.alreadyHere
-        ? `${result.profile.name} is already on this device.`
-        : `Brought ${result.profile.name} here! Pick her name above to play.`
-    );
-    $("#profile-link-code").value = "";
-    renderProfiles();
-  });
+/* Trim + lowercase, the one normalization every duplicate-name check in this
+   pass (client and server) uses consistently. */
+function normalizeName(name) {
+  return String(name || "").trim().toLowerCase();
 }
 
-function renderProfiles() {
-  const first = Store.firstRun;
-  $("#profiles-title").textContent = first ? "Welcome! What's your name?" : "Who's spelling today?";
-  $("#profiles-sub").textContent = first
-    ? "Your stars, medals and avatar are all saved under your name."
-    : "Pick your name to load your stars, medals and avatar.";
+/* True if `name` (once normalized) matches an already-known profile — either
+   a household directory row (fetched from the server) or a local profile
+   already on this device (covers local-only profiles, which never appear
+   server-side, and anything not yet pushed). This is the client-side half
+   of the duplicate-name fix; server/index.js's /sync handler carries a
+   second, defense-in-depth copy of the same check.
 
-  $("#profile-list").innerHTML = first
-    ? ""
-    : Store.profiles()
-        .map((p) => {
-          const m = p.medals || {};
-          const badges = [
-            m.gold ? `🥇${m.gold}` : "", m.silver ? `🥈${m.silver}` : "",
-            m.bronze ? `🥉${m.bronze}` : "", m.ribbon ? `🎀${m.ribbon}` : ""
-          ].filter(Boolean).join(" ");
-          const active = p.id === Store.file.activeId;
-          const acc = p.stats && p.stats.attempts ? Math.round((p.stats.correct / p.stats.attempts) * 100) + "% accuracy" : "no words yet";
-          return `<button class="voice-card" data-profile="${p.id}" aria-pressed="${active}">
-              <span class="emoji">${active ? "⭐" : "👤"}</span>
-              <span><b>${escapeHtml(p.name)}</b>
-                <small>${p.stars} stars · ${acc}</small>
-                ${badges ? `<span class="using">${badges}</span>` : ""}
-              </span></button>`;
-        })
-        .join("");
+   `excludeLocalId` matters for exactly one case: the first-run "Let's go"
+   flow renames the still-unclaimed placeholder profile in place rather
+   than creating a new one (same precedent as the rest of this screen), so
+   comparing against every local profile would otherwise flag her own
+   placeholder as a collision with herself the moment she types the
+   default name back. */
+function nameCollides(name, directory, excludeLocalId) {
+  const norm = normalizeName(name);
+  if (!norm) return false;
+  const local = Store.profiles().some((p) => p.id !== excludeLocalId && normalizeName(p.name) === norm);
+  const remote = (directory || []).some((row) => normalizeName(row.name) === norm);
+  return local || remote;
+}
 
+/* The server directory (GET /api/profiles) plus any purely local-only
+   profiles on this device — those deliberately never have a server row
+   (see blankProfile()'s sync.localOnly comment in js/store.js), so they'd
+   otherwise vanish from the picker entirely. Local-only rows carry
+   `local: true` and no `code`; they're never PIN-gated (see renderProfileCard()) —
+   there's no server-side identity to protect a PIN for, and the whole
+   reason they're local-only is that nothing about them leaves this device. */
+async function loadProfileDirectory() {
+  const remote = await Store.fetchDirectory();
+  const localOnly = Store.profiles()
+    .filter((p) => p.sync && p.sync.localOnly)
+    .map((p) => ({
+      local: true,
+      localId: p.id,
+      name: p.name,
+      stars: p.stars,
+      medals: p.medals,
+      dayStreak: (p.visit && p.visit.dayStreak) || 0,
+      hasPin: false
+    }));
+  return remote.concat(localOnly);
+}
+
+function medalBadges(medals) {
+  const m = medals || {};
+  return [
+    m.gold ? `🥇${m.gold}` : "", m.silver ? `🥈${m.silver}` : "",
+    m.bronze ? `🥉${m.bronze}` : "", m.ribbon ? `🎀${m.ribbon}` : ""
+  ].filter(Boolean).join(" ");
+}
+
+/* The inline PIN-entry / set-a-PIN form for one directory card, styled like
+   the Grown-Ups dashboard's own math gate (renderGate()) for visual
+   consistency — a .notice line plus a .text-line + .btn row, no bespoke
+   CSS. Two modes read off `row.hasPin`: every pre-existing profile has none
+   yet, so the first grown-up to pick it from the picker is prompted to set
+   one right there (claim-only — see Store.claimPin()'s own comment for why
+   there's no separate "change PIN" flow). */
+function renderPinForm(row) {
+  const claiming = !row.hasPin;
+  return `
+    <div class="notice" style="margin-top:8px;margin-bottom:0">
+      ${claiming
+        ? `Set a PIN for ${escapeHtml(row.name || "this profile")} so her family can pick her from this list.`
+        : `Enter ${escapeHtml(row.name || "this profile")}'s PIN.`}
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input type="password" inputmode="numeric" class="text-line" id="pin-input" maxlength="8"
+             placeholder="${claiming ? "New PIN (4-8)" : "PIN"}" style="width:120px" autocomplete="off" aria-label="PIN">
+      <button class="btn small" id="pin-go">${claiming ? "Set PIN" : "Unlock"}</button>
+      <button class="btn small ghost" id="pin-cancel">Cancel</button>
+    </div>`;
+}
+
+function renderProfileCard(row) {
+  const active = row.local
+    ? Store.file.activeId === row.localId
+    : !!(Store.data && Store.data.sync && Store.data.sync.code === row.code);
+  const badges = medalBadges(row.medals);
+  const key = row.local ? `local:${row.localId}` : row.code;
+  return `<div class="profile-card-wrap">
+      <button class="voice-card" data-select-profile="${escapeHtml(key)}" aria-pressed="${active}">
+        <span class="emoji">${active ? "⭐" : "👤"}</span>
+        <span><b>${escapeHtml(row.name || "Unnamed")}</b>
+          <small>${row.stars || 0} stars · streak ${row.dayStreak || 0}${row.local ? " · this device only" : ""}</small>
+          ${badges ? `<span class="using">${badges}</span>` : ""}
+        </span></button>
+      ${!row.local && pinFlowCode === row.code ? renderPinForm(row) : ""}
+    </div>`;
+}
+
+function renderProfileCards() {
+  $("#profile-list").innerHTML = profileDirectory.length
+    ? profileDirectory.map(renderProfileCard).join("")
+    : `<p class="muted">No profiles yet — add the first one below.</p>`;
+}
+
+/* Submits whichever inline form is open (pinFlowCode) — claiming a PIN for a
+   profile that doesn't have one yet, or verifying one that does, then
+   adopting/switching to that profile either way once it succeeds. Mirrors
+   the non-punitive, try-again tone the rest of this app uses for mistakes:
+   a wrong PIN just clears the field and lets her try again, never a dead
+   end. */
+async function submitPinFlow() {
+  const code = pinFlowCode;
+  if (!code) return;
+  const row = profileDirectory.find((r) => r.code === code);
+  if (!row) return;
+  const input = $("#pin-input");
+  const pin = input ? input.value.trim() : "";
+  if (!pin) {
+    toast("Type a PIN first.");
+    return;
+  }
+
+  if (!row.hasPin) {
+    const claimed = await Store.claimPin(code, pin);
+    if (!claimed.ok) {
+      if (claimed.status === 409) {
+        // someone else (another device, another tab) claimed it a moment
+        // ago — the row now has a PIN, so re-render into the unlock form
+        // instead of a dead end
+        row.hasPin = true;
+        toast("That PIN was just set from another device — enter it now.");
+        renderProfileCards();
+        const retry = $("#pin-input");
+        if (retry) retry.focus();
+        return;
+      }
+      toast(claimed.error === "pin must be 4-8 characters" ? "PINs are 4-8 characters." : "Couldn't set that PIN — try again.");
+      return;
+    }
+    row.hasPin = true;
+  }
+
+  const result = await Store.unlockProfile(code, pin);
+  if (!result.ok) {
+    if (result.status === 401) toast("Wrong PIN — try again.");
+    else if (result.status === 429) toast("Too many tries — wait a minute and try again.");
+    else toast("Couldn't unlock that profile right now — try again.");
+    if (input) { input.value = ""; input.focus(); }
+    return;
+  }
+
+  pinFlowCode = null;
+  applyProfileSettings();
+  sfx.star();
+  toast(`Hi ${playerName()}! 👋`);
+  showScreen("home");
+}
+
+function renderProfileNewForm(first) {
   $("#profile-new").innerHTML = `
     <div class="field" style="margin-top:${first ? 0 : 16}px;margin-bottom:14px">
       <label>What kind of player?</label>
@@ -736,22 +793,15 @@ function renderProfiles() {
       <label for="profile-name">${first ? "Your name" : "New player"}</label>
       <input type="text" class="text-line" id="profile-name" maxlength="18"
              placeholder="Type a name" style="flex:1 1 200px" autocomplete="off">
+    </div>
+    <div class="slider-row">
+      <label for="profile-pin">Their PIN</label>
+      <input type="password" inputmode="numeric" class="text-line" id="profile-pin" maxlength="8"
+             placeholder="4-8 characters" style="width:140px" autocomplete="off">
       <button class="btn" id="btn-profile-create">${first ? "Let's go! 🎀" : "＋ Add player"}</button>
     </div>
-    ${first ? "" : '<div class="row center" style="margin-top:10px"><button class="btn ghost small" data-go="home">← Back</button></div>'}
-    <div class="field" style="margin-top:18px;border-top:1px solid var(--line,#e5e5e5);padding-top:14px">
-      <label>Already playing on another device?</label>
-      <p class="muted" style="font-size:13px;margin:2px 0 8px">
-        ${first
-          ? "Bring that profile here with its code, instead of starting a new one."
-          : "Bring another profile here with its code — Mila, Layla, whoever's already playing elsewhere."}
-      </p>
-      <div class="row">
-        <input type="text" class="text-line" id="profile-link-code" maxlength="6"
-               placeholder="ABC123" style="width:140px;text-transform:uppercase">
-        <button class="btn small ghost" id="btn-profile-link">Link this device</button>
-      </div>
-    </div>`;
+    <p class="muted" style="font-size:13px;margin:2px 0 0" id="profile-name-error"></p>
+    ${first ? "" : '<div class="row center" style="margin-top:10px"><button class="btn ghost small" data-go="home">← Back</button></div>'}`;
 
   // resets on every render — a new profile always starts from "Big Kid"
   // pre-selected, so an existing parent adding a second, older player never
@@ -766,9 +816,139 @@ function renderProfiles() {
 
   const input = $("#profile-name");
   input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("#profile-pin").focus();
+  });
+  const pinInput = $("#profile-pin");
+  pinInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("#btn-profile-create").click();
   });
   if (first) input.focus();
+}
+
+function wireProfiles() {
+  $("#btn-switch-player").addEventListener("click", () => {
+    Store.firstRun = false;
+    showScreen("profiles");
+  });
+
+  $("#profile-list").addEventListener("click", async (e) => {
+    if (e.target.closest("#pin-cancel")) {
+      pinFlowCode = null;
+      renderProfileCards();
+      return;
+    }
+    if (e.target.closest("#pin-go")) {
+      await submitPinFlow();
+      return;
+    }
+
+    const card = e.target.closest("[data-select-profile]");
+    if (!card) return;
+    const key = card.dataset.selectProfile;
+
+    if (key.startsWith("local:")) {
+      // local-only profiles have no server row to PIN-gate — see
+      // loadProfileDirectory()'s comment — so selecting one just switches
+      // to it directly, same as every card used to work before this pass.
+      Store.switchProfile(key.slice("local:".length));
+      applyProfileSettings();
+      sfx.star();
+      toast(`Hi ${playerName()}! 👋`);
+      showScreen("home");
+      return;
+    }
+
+    pinFlowCode = pinFlowCode === key ? null : key;
+    renderProfileCards();
+    const input = $("#pin-input");
+    if (input) input.focus();
+  });
+
+  $("#profile-list").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target && e.target.id === "pin-input") {
+      e.preventDefault();
+      submitPinFlow();
+    }
+  });
+
+  $("#profile-new").addEventListener("click", async (e) => {
+    if (!e.target.closest("#btn-profile-create")) return;
+    const nameInput = $("#profile-name");
+    const pinInput = $("#profile-pin");
+    const errorEl = $("#profile-name-error");
+    const name = nameInput.value.trim();
+    const pin = pinInput ? pinInput.value.trim() : "";
+    if (errorEl) errorEl.textContent = "";
+
+    if (!name) {
+      nameInput.focus();
+      toast("Type a name first.");
+      return;
+    }
+    // The direct fix for the real incident this pass responds to: "add
+    // another player" used to always create a brand-new blank profile, so
+    // typing an existing child's name here silently produced an empty
+    // duplicate instead of finding her. See server/index.js's /sync
+    // handler for the server-side copy of this same check.
+    if (nameCollides(name, profileDirectory, Store.firstRun ? Store.file.activeId : null)) {
+      if (errorEl) errorEl.textContent = "That name's already taken — try another, or find them in the list above.";
+      nameInput.focus();
+      return;
+    }
+    if (pin.length < 4 || pin.length > 8) {
+      toast("Choose a PIN that's 4-8 characters.");
+      if (pinInput) pinInput.focus();
+      return;
+    }
+
+    let profile;
+    if (Store.firstRun) {
+      // the blank first-run profile gets named rather than duplicated
+      Store.renameProfile(Store.file.activeId, name);
+      Store.setStage(newProfileStage);
+      Store.firstRun = false;
+      profile = Store.data;
+    } else {
+      profile = Store.createProfile(name, newProfileStage);
+      Store.switchProfile(profile.id);
+    }
+    applyProfileSettings();
+    sfx.fanfare("bronze");
+    toast(`Welcome, ${name}! ⭐`);
+    showScreen("home");
+
+    // Every new profile gets a PIN from day one (existing, pre-PIN profiles
+    // are retrofitted the first time a grown-up selects them from the
+    // picker instead — see renderPinForm()). Best-effort: createProfile()
+    // already generated a pairing code client-side and kicked off its
+    // first push in the background (Store._autoProvisionSync()), but that
+    // push hasn't necessarily landed on the server yet — reconcileSync()
+    // here is called again (harmless; it just re-pushes current state) to
+    // make sure the row exists before claiming a PIN against it. If the
+    // server isn't reachable at all right now, this just silently doesn't
+    // claim a PIN yet; she can still play immediately either way, and the
+    // very next time a grown-up picks her from the directory, the
+    // no-PIN-yet prompt covers it, same as any other pre-existing profile.
+    if (profile.sync && profile.sync.code && !profile.sync.localOnly) {
+      await Store.reconcileSync(profile);
+      await Store.claimPin(profile.sync.code, pin);
+    }
+  });
+}
+
+async function renderProfiles() {
+  const first = Store.firstRun;
+  $("#profiles-title").textContent = first ? "Welcome! What's your name?" : "Who's spelling today?";
+  $("#profiles-sub").textContent = first
+    ? "Your stars, medals and avatar are all saved under your name — or find yourself in the list if you've played before."
+    : "Pick your name, then enter your PIN to load your stars, medals and avatar.";
+
+  pinFlowCode = null;
+  $("#profile-list").innerHTML = `<p class="muted">Loading profiles…</p>`;
+  renderProfileNewForm(first);
+
+  profileDirectory = await loadProfileDirectory();
+  renderProfileCards();
 }
 
 /* ============================================================

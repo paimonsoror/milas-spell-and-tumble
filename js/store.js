@@ -751,10 +751,19 @@ const Store = {
   },
 
   /* Pulls another device's synced profile down and replaces this profile's
-     local data with it — for onboarding a second device. Destructive to
-     whatever was here before; the caller must confirm with the parent first.
-     Resolves true/false rather than throwing, since a failed link is an
-     expected, recoverable outcome (wrong code, offline), not an error state. */
+     local data with it. Destructive to whatever was here before; the caller
+     must confirm with the parent first. Resolves true/false rather than
+     throwing, since a failed link is an expected, recoverable outcome
+     (wrong code, offline), not an error state.
+
+     The household profile picker (renderProfiles() in js/app.js) no longer
+     calls this — it now goes through unlockProfile() below, which is
+     PIN-gated and never mutates an already-active profile in place. This
+     one function survives specifically for the Settings tab's "already
+     have this profile's code, and this device is currently local-only or
+     wants to re-point itself" flow (renderSyncSection()'s #sync-link),
+     where deliberately overwriting the active profile in place is exactly
+     what's wanted. */
   async linkWithCode(code) {
     try {
       const res = await fetch(`/api/profiles/${code}`);
@@ -771,37 +780,100 @@ const Store = {
     }
   },
 
-  /* Same fetch as linkWithCode() above, but safe to offer on a device that
-     already has at least one claimed profile — the "add another player"
-     screen's own "Already playing on another device?" option. linkWithCode()
-     deliberately mutates the *active* profile in place (see _adoptSnapshot's
-     comment), which is exactly why it was never wired up there: typing a
-     second child's code on a device that already has one claimed would
-     silently overwrite whoever's currently active. This instead builds a
-     brand-new local profile directly from blankProfile() — not
-     createProfile(), which auto-provisions and pushes a throwaway sync code
-     we'd only immediately discard — and adopts the fetched snapshot onto
-     that new profile, so nothing already on this device is touched. If the
-     code is already linked here (someone fat-fingers a code they already
-     have), returns the existing local copy instead of creating a duplicate. */
-  async linkAdditionalProfile(code) {
-    const existing = this.profiles().find((p) => p.sync && p.sync.code === code);
-    if (existing) return { ok: true, profile: existing, alreadyHere: true };
+  /* ---- household profile directory + PIN gate ----
+     See docs/HANDOFF-ARCHITECTURE.md's dated addendum. Selecting *which*
+     profile to play as is now a human, PIN-gated decision, layered on top
+     of the same whole-snapshot/timestamp-wins sync transport above — none
+     of that machinery changed. This is the direct fix for a real incident:
+     "add another player" used to only ever create a brand-new blank
+     profile, so bringing an existing child's profile to a new/cleared
+     device silently produced an empty duplicate instead. */
+
+  /* GET /api/profiles — every household profile as a lean directory row
+     ({ code, name, stars, medals, dayStreak, hasPin, updatedAt }), for the
+     picker to render as cards before anything is unlocked. `[]` on any
+     failure (network, bad JSON) rather than throwing, matching how the
+     rest of this file treats sync as best-effort — the picker screen
+     itself decides what an empty directory means (e.g. "server
+     unreachable, only offline profiles show"). */
+  async fetchDirectory() {
     try {
-      const res = await fetch(`/api/profiles/${code}`);
-      if (!res.ok) return { ok: false };
-      const { snapshot } = await res.json();
-      const fresh = blankProfile();
-      this.file.profiles[fresh.id] = fresh;
-      this.file.order.push(fresh.id);
-      this._adoptSnapshot(snapshot, fresh);
-      fresh.sync.code = code;
-      fresh.sync.localOnly = false;
-      fresh.sync.lastSyncedAt = Date.now();
-      this.save();
-      return { ok: true, profile: fresh };
+      const res = await fetch("/api/profiles");
+      if (!res.ok) return [];
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
     } catch {
-      return { ok: false };
+      return [];
+    }
+  },
+
+  /* Claims a PIN for a profile that doesn't have one yet — true of every
+     profile that existed before this feature shipped. Claim-only: the
+     server 409s a second attempt rather than changing an existing PIN (see
+     docs/HANDOFF-ARCHITECTURE.md's addendum for why "change my PIN" is
+     explicitly deferred). Returns `{ ok, status, error }` rather than a
+     bare boolean so the caller can tell a 409 (someone else just claimed
+     it — fall into the unlock flow instead) from a 400 (bad PIN, let her
+     try again) from a network failure. */
+  async claimPin(code, pin) {
+    try {
+      const res = await fetch(`/api/profiles/${code}/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+      });
+      if (res.ok) return { ok: true };
+      let body = null;
+      try { body = await res.json(); } catch { /* no body to read */ }
+      return { ok: false, status: res.status, error: (body && body.error) || "request failed" };
+    } catch {
+      return { ok: false, status: 0, error: "network error" };
+    }
+  },
+
+  /* Verifies a PIN and, on success, adopts that profile onto this device —
+     reusing the exact dedup guard linkAdditionalProfile() used to have (an
+     already-linked code reuses its existing local copy rather than
+     duplicating it), but unlike that retired function this ALSO switches
+     the active profile: a human just explicitly picked a name and typed a
+     PIN, which is a deliberate "play as her now" action, not a background
+     onboarding step. Returns `{ ok, profile }` on success, `{ ok: false,
+     status, error }` otherwise (401 wrong pin, 409 no pin set yet, 404
+     unknown code, 429 rate-limited, or a network failure). */
+  async unlockProfile(code, pin) {
+    try {
+      const res = await fetch(`/api/profiles/${code}/unlock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+      });
+      let body = null;
+      try { body = await res.json(); } catch { /* no body to read */ }
+      if (!res.ok) {
+        return { ok: false, status: res.status, error: (body && body.error) || "request failed" };
+      }
+      const snapshot = body.snapshot;
+      const existing = this.profiles().find((p) => p.sync && p.sync.code === code);
+      let target;
+      if (existing) {
+        this._adoptSnapshot(snapshot, existing);
+        target = existing;
+      } else {
+        const fresh = blankProfile();
+        this.file.profiles[fresh.id] = fresh;
+        this.file.order.push(fresh.id);
+        this._adoptSnapshot(snapshot, fresh);
+        fresh.sync.code = code;
+        fresh.sync.localOnly = false;
+        fresh.sync.lastSyncedAt = Date.now();
+        target = fresh;
+      }
+      this.file.activeId = target.id;
+      this._syncActive();
+      this.save();
+      return { ok: true, profile: target };
+    } catch {
+      return { ok: false, status: 0, error: "network error" };
     }
   },
 
@@ -834,7 +906,21 @@ const Store = {
         body: JSON.stringify({ snapshot: JSON.stringify(p), updatedAt: Date.now() })
       });
       if (!res.ok) {
-        p.sync.lastError = `sync failed (${res.status})`;
+        // A 409 here means the server's own duplicate-name guard rejected
+        // this push (see server/index.js's /sync handler) — a distinct,
+        // human-readable message, not the generic "sync failed (409)" a
+        // parent can't act on. Every other non-2xx stays generic; this is
+        // the one status this endpoint returns for a reason a person can
+        // actually fix (rename the profile).
+        if (res.status === 409) {
+          let detail = null;
+          try { detail = await res.json(); } catch { /* no body to read */ }
+          p.sync.lastError = detail && detail.error === "name already taken"
+            ? `another profile is already named "${detail.name}" — rename this one to sync again`
+            : "sync rejected (409)";
+        } else {
+          p.sync.lastError = `sync failed (${res.status})`;
+        }
         this._saveLocalOnly();
         return;
       }

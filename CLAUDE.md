@@ -97,6 +97,17 @@ unlock avatar items; competition mode scores a routine out of 10 with three judg
 >   database (in-process `VACUUM INTO` snapshots + retention). Its §11 is
 >   the addendum recording exactly what shipped and what's still deferred
 >   (off-node backup shipping, `.ts` conversion beyond JSDoc checking).
+>   **Third pass built**, triggered by a real data-integrity incident (the
+>   live database had accumulated duplicate "Mila"/"Layla" rows because "add
+>   another player" could only ever create a brand-new blank profile, never
+>   find an existing one). Its §12 records what shipped: a household profile
+>   directory fetched from the server every time the picker opens, PIN-gated
+>   selection (claim-only — every pre-existing profile gets prompted to set
+>   one the first time it's picked; there's no change/forgot-PIN flow yet,
+>   deliberately deferred), and a client-plus-server duplicate-name guard.
+>   The machine-to-machine sync routes and the whole-snapshot/timestamp-wins
+>   model are untouched — this only changes how a human picks *which*
+>   profile to play as.
 >
 > Also ran **in parallel**, triggered by a second, younger sibling (age 5)
 > now wanting to play:
@@ -316,6 +327,41 @@ Two profile fields drive the engagement loop and are worth knowing about:
   the Grown-Ups dashboard's Settings tab (`renderSyncSection()`). Every sync
   call still silently no-ops without a reachable server — that resilience
   didn't change, only which side is treated as the source of truth.
+  `lastError` also now distinguishes a real network failure from a 409
+  ("another profile is already named X") — see the PIN-gate paragraph
+  below and `docs/HANDOFF-ARCHITECTURE.md` §12.
+  **Update, later pass: the transport above is unchanged, but *selecting*
+  which profile to play as is now PIN-gated, not free-text-code-gated.**
+  A real incident (duplicate "Mila"/"Layla" rows in the live database,
+  caused by "add another player" only ever creating a brand-new blank
+  profile) prompted this. The household profile picker
+  (`renderProfiles()`/`wireProfiles()` in `js/app.js`) now fetches every
+  profile from a new, unauthenticated `GET /api/profiles` directory
+  endpoint every time it opens and renders each as a card — merged with any
+  purely local `sync.localOnly` profiles on this device, which never have a
+  server row. Selecting a card requires its PIN: every profile that existed
+  before this pass has none yet, so the first grown-up to pick it is
+  prompted to set one right there (`POST /api/profiles/:code/pin`,
+  claim-only — it 409s a second attempt rather than changing an existing
+  PIN); a profile that already has one prompts to enter it
+  (`POST /api/profiles/:code/unlock`), rate-limited server-side (5 wrong
+  attempts locks that code out for a minute — a best-effort speed bump, not
+  real security, appropriate to this app's "internal household use only"
+  threat model). PINs are hashed server-side with `crypto.scryptSync`,
+  never sent back to a client. The old free-text "Already playing on
+  another device? [CODE]" field is gone, superseded by the directory;
+  `Store.linkAdditionalProfile()` is retired with it.
+  `Store.linkWithCode()` survives — it still backs the Settings tab's
+  separate "already have this profile's code" re-link flow, untouched by
+  this pass. New profiles (both the first-run "Let's go" flow and "+ Add
+  player") now set a PIN as part of creation, and are blocked from reusing
+  a name that's already taken (trimmed, case-insensitive) either locally or
+  in the fetched directory — `POST /api/profiles/:code/sync` carries a
+  server-side copy of that same name check as defense-in-depth. See
+  `docs/HANDOFF-ARCHITECTURE.md` §12 for the full incident writeup and what
+  this deliberately left out (a "change my PIN"/forgot-PIN flow, cleaning
+  up the existing duplicate rows — the project owner's own job via
+  `/admin`).
 - **`stage`** — `"speller"` or `"explorer"`. Which of the two tracks this profile
   plays: the original spelling game, or the pre-literacy letters track for a
   younger sibling (see `docs/HANDOFF-EARLY-LEARNER.md`). Always defaults to
